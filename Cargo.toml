@@ -1,0 +1,13 @@
+[package]
+name = "git_plus_plus"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [
+    "core",
+    "storage-file",
+    "backend-git",
+    "cli",
+]
+resolver = "2"

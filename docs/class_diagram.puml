@@ -1,0 +1,136 @@
+@startuml
+' --- skin params for clarity (optional) ---
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+
+' Interfaces / Traits
+interface "RepoBackend\n(trait)" as RepoBackend {
+  +run_cmd(cmd: String, args: Vec<String>) : Result<Output, Error>
+  +push(refspecs: Vec<RefSpec>, remote: RemoteRef) : Result<bool, Error>
+  +fetch(remote: RemoteRef, refspecs: Vec<RefSpec>) : Result<FetchReport, Error>
+  +read_ref(refname: String) : Result<Option<CommitId>, Error>
+  +write_ref(refname: String, commit: CommitId) : Result<(), Error>
+  +list_remotes() : Result<Vec<RemoteRef>, Error>
+}
+
+interface "GraphStorage\n(trait)" as GraphStorage {
+  +persist_node(node: Node) : Result<(), Error>
+  +load_node(id: NodeId) : Result<Node, Error>
+  +list_roots() : Result<Vec<NodeId>, Error>
+  +begin_tx() : Result<TxHandle, Error>
+  +commit_tx(tx: TxHandle) : Result<(), Error>
+  +rollback_tx(tx: TxHandle) : Result<(), Error>
+}
+
+' Core classes / structs
+class "VersionGraph" as VersionGraph {
+  -nodes: HashMap<NodeId, Node>
+  -roots: Set<NodeId>
+  -storage: Box<dyn GraphStorage>
+  -backend: Box<dyn RepoBackend>
+  -plugin_mgr: PluginManager
+  +new(storage: Box<dyn GraphStorage>, backend: Box<dyn RepoBackend>) : Self
+  +add_node(parent_ids: Vec<NodeId>, node_payload: NodePayload) : Result<NodeId, Error>
+  +amend(target: NodeId) : Result<NodeId, Error>
+  +merge_nodes(a: NodeId, b: NodeId, strategy: MergeStrategy) : Result<NodeId, Error>
+  +get_node(id: NodeId) : Result<Node, Error>
+  +find_by_tag(tag: &str) : Vec<NodeId>
+  +checkout(node: NodeId) : Result<WorkspaceSnapshot, Error>
+  +compute_push_set(node: NodeId, remote: RemoteRef) : Result<Vec<NodeId>, Error>
+}
+
+class "Node" as Node {
+  -id: NodeId
+  -parents: Vec<NodeId>
+  -children: Vec<NodeId>
+  -author: Author
+  -message: String
+  -created_at: DateTime
+  -remotes: Vec<RemoteRef>          ' allowed remotes for this node
+  -tags: Vec<Tag>
+  -metadata: Map<String,String>
+  +add_remote(remote: RemoteRef) : ()
+  +remove_remote(remote_name: String) : ()
+  +remove_all_remotes() : ()
+  +add_tag(tag: Tag) : ()
+  +remove_tag(tag_name: String) : ()
+}
+
+class "RemoteRef" as RemoteRef {
+  -name: String
+  -url: String
+  -specs: Map<String, String>
+}
+
+class "PushManager" as PushManager {
+  -backend: Box<dyn RepoBackend>
+  -graph: VersionGraph
+  +validate_contiguous_remotes(node: NodeId, remote: RemoteRef) : Result<(), Error>
+  +compute_nodes_to_push(node: NodeId, remote: RemoteRef) : Result<Vec<NodeId>, Error>
+  +push(node: NodeId, remote: RemoteRef, dry_run: bool) : Result<bool, Error>
+  +mark_subgraph_unpushable(root: NodeId) : Result<(), Error>
+}
+
+class "CommandDispatcher" as CommandDispatcher {
+  -graph: VersionGraph
+  -push_mgr: PushManager
+  -plugin_mgr: PluginManager
+  +dispatch(cmd: Command) : Result<CmdResult, Error>
+  +register_command(spec: CommandSpec) : ()
+}
+
+class "PluginManager" as PluginManager {
+}
+
+class "GitRepo" as GitRepo {
+  -workdir: Path
+  -gitdir: Path
+  -backend_cfg: GitConfig
+  +new(workdir: Path) : Self
+  +init_bare(name: String) : Result<(), Error>
+  +create_symlink_for(name: String) : Result<(), Error>
+  .. implements RepoBackend
+}
+
+class "UIConnector" as UIConnector {
+  -dispatcher: CommandDispatcher
+  +start_cli() : ()
+  +start_gui(connection: GuiConnection) : ()
+}
+
+class "Tag" as Tag {
+  -name: String
+  -created_at: DateTime
+  -meta: Map<String,String>
+  +move_to(node: NodeId) : ()
+  +copy_to(node: NodeId) : ()
+}
+
+class "Command" as Command {
+  -name: String
+  -args: Vec<String>
+  -flags: Map<String,String>
+}
+
+
+' Relationships
+VersionGraph --> GraphStorage
+VersionGraph --> RepoBackend : uses
+VersionGraph *-- Node
+PushManager --> RepoBackend
+PushManager --> VersionGraph
+CommandDispatcher --> VersionGraph
+CommandDispatcher --> PushManager
+CommandDispatcher --> PluginManager
+GitRepo ..|> RepoBackend
+UIConnector --> CommandDispatcher
+
+' Notes about selective push
+note top of PushManager
+  Правила селективного пуша:
+  * Нода может быть запушена только на remotes, указанные в её массиве `remotes`.
+  * При push требуется непрерывная цепочка remotes до корня графа (для совместимости с git) (валидируется validate_contiguous_remotes).
+  * Подграфы можно пометить непушабельными (remotes = []).
+end note
+
+@enduml

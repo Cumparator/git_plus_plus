@@ -1,0 +1,59 @@
+# Бинарные файлы и исполняемые файлы
+/target/
+**/*.rs.bk
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Файлы Cargo
+Cargo.lock
+
+# Файлы редакторов и IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Файлы операционных систем
+.DS_Store
+Thumbs.db
+
+# Файлы бенчмарков
+**/*.bench
+
+# Файлы профилирования
+*.profraw
+
+# Файлы coverage
+**/coverage/
+*.gcda
+*.gcno
+**/*.gcov
+
+# Временные файлы
+*.tmp
+*.temp
+
+# Файлы окружения
+.env
+.env.local
+.env.production
+
+# Файлы логирования
+*.log
+/logs/
+
+# Файлы сборки для других языков
+*.o
+*.obj
+*.class
+
+# Файлы архивации
+*.tar.gz
+*.zip
+*.rar
+
+# Файлы макросов (если используются)
+*.s
