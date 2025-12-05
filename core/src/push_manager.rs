@@ -1,72 +1,102 @@
-// core/src/push_manager.rs
-
 use std::collections::{HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
-// --- ЗАГЛУШКИ ДЛЯ КОМПИЛЯЦИИ (В реальном проекте это будут импорты) ---
+use crate::types::{NodeId, RemoteRef};
+use crate::backend::{RepoBackend, GraphOps};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NodeId(pub String);
+#[derive(Debug)]
+pub struct PushError(String);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RemoteRef {
-    pub name: String,
-    pub url: String,
-}
-
-// Минимальная структура Node
-pub struct Node {
-    pub parents: Vec<NodeId>,
-    pub remotes: HashSet<RemoteRef>,
-}
-
-// Минимальный трейт GraphOps
-pub trait GraphOps {
-    fn get_node(&self, id: &NodeId) -> Result<Node, Box<dyn Error>>;
-}
-
-// Минимальная структура VersionGraph
-pub struct VersionGraph;
-impl GraphOps for VersionGraph {
-    fn get_node(&self, _id: &NodeId) -> Result<Node, Box<dyn Error>> {
-        Err("Метод VersionGraph::get_node не реализован".into())
+impl fmt::Display for PushError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Push Error: {}", self.0)
     }
 }
 
+impl Error for PushError {}
 
-/// Расширенный трейт RepoBackend (добавлен метод для пуша)
-pub trait RepoBackend {
-    fn read_ref(&self, refname: String) -> Result<Option<NodeId>, Box<dyn Error>>;
+/// Управляющий модуль для операций отправки изменений (Push).
+///
+/// Отвечает за валидацию прав доступа (проверку разрешенных `remotes` у нод)
+/// и координацию процесса обновления удаленных ссылок.
+pub struct PushManager<'a> {
+    graph: &'a dyn GraphOps,
+    backend: &'a dyn RepoBackend,
+}
 
-    /// Выполняет пуш всех Git-объектов, необходимых для достижения `local_tip_id`,
-    /// и обновляет удаленную ссылку `remote_target_ref` на `local_tip_id`.
-    fn push_update_ref(
+impl<'a> PushManager<'a> {
+    /// Создает новый экземпляр менеджера.
+    ///
+    /// # Arguments
+    ///
+    /// * `graph` - Ссылка на интерфейс для чтения графа версий.
+    /// * `backend` - Ссылка на низкоуровневый Git-бэкенд.
+    pub fn new(graph: &'a dyn GraphOps, backend: &'a dyn RepoBackend) -> Self {
+        Self { graph, backend }
+    }
+
+    /// Вычисляет список нод, которые необходимо отправить.
+    ///
+    /// Проходит по графу от `start_node` вглубь к родителям, проверяя:
+    /// 1. Присутствует ли нода уже на удаленном сервере (остановка обхода).
+    /// 2. Разрешено ли этой ноде быть отправленной в данный `remote` (валидация).
+    ///
+    /// # Arguments
+    ///
+    /// * `start_node` - Нода, с которой начинается пуш.
+    /// * `remote` - Целевой репозиторий.
+    /// * `remote_head` - Текущая вершина на удаленном репозитории (если есть).
+    fn compute_nodes_to_push(
         &self,
+        start_node: &NodeId,
         remote: &RemoteRef,
-        local_tip_id: &NodeId,
-        remote_target_ref: &str
-    ) -> Result<(), Box<dyn Error>>;
-}
+        remote_head: Option<&NodeId>,
+    ) -> Result<Vec<NodeId>, Box<dyn Error>> {
+        let mut to_push = Vec::new();
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
 
-// --- КОНЕЦ ЗАГЛУШЕК И ТРЕЙТОВ ---
+        queue.push_back(start_node.clone());
+        visited.insert(start_node.clone());
 
+        while let Some(current_id) = queue.pop_front() {
+            if let Some(head) = remote_head {
+                if &current_id == head {
+                    continue;
+                }
+            }
 
-/// Управляющий модуль для всех операций пуша.
-pub struct PushManager {
-    graph: VersionGraph,
-    backend: Box<dyn RepoBackend>,
-}
+            let node = self.graph.get_node(&current_id)?;
 
-impl PushManager {
+            if !node.remotes.contains(remote) {
+                return Err(Box::new(PushError(format!(
+                    "Node {:?} does not allow pushing to remote '{}'",
+                    current_id, remote.name
+                ))));
+            }
+
+            to_push.push(current_id.clone());
+
+            for parent_id in node.parents {
+                if !visited.contains(&parent_id) {
+                    visited.insert(parent_id.clone());
+                    queue.push_back(parent_id);
+                }
+            }
+        }
+
+        Ok(to_push)
+    }
+
     /// Выполняет операцию селективного пуша.
     ///
-    /// # Аргументы
+    /// # Arguments
     /// * `node_id` - Нода, которую мы хотим сделать вершиной удаленного репозитория.
     /// * `remote` - Удаленный репозиторий для пуша.
     /// * `dry_run` - Если true, только вычисляет и выводит, что будет запушено.
     ///
-    /// # Возвращает
+    /// # Returns
     /// `Ok(true)`, если пуш был выполнен или симулирован; `Ok(false)`, если пушить нечего.
     pub fn push(
         &self,
@@ -74,42 +104,34 @@ impl PushManager {
         remote: &RemoteRef,
         dry_run: bool,
     ) -> Result<bool, Box<dyn Error>> {
-        // 1. Вычисляем набор нод для пуша.
-        let nodes_to_push = self.compute_nodes_to_push(node_id, remote)?;
+        let remote_branch = "main";
+        let remote_ref_name = format!("refs/heads/{}", remote_branch);
 
-        // Если список пуст, значит, целевая нода уже на удаленном репозитории.
+        let cached_remote_ref = format!("refs/remotes/{}/{}", remote.name, remote_branch);
+        let remote_head = self.backend.read_ref(cached_remote_ref)?;
+
+        let nodes_to_push = self.compute_nodes_to_push(node_id, remote, remote_head.as_ref())?;
+
         if nodes_to_push.is_empty() {
-            println!("Node {:?} уже присутствует на удаленном репозитории '{}'. Пуш не требуется.", node_id, remote.name);
+            println!("Все ноды до {:?} уже находятся на удаленном репозитории '{}'.", node_id, remote.name);
             return Ok(false);
         }
 
-        // 2. Подготавливаем метаданные для пуша.
-        let count = nodes_to_push.len();
-        // Внутренняя ссылка, которую мы будем обновлять на удаленном репозитории.
-        let remote_ref_name = format!("refs/gpp/remote/{}", remote.name);
-
-        // 3. Логика Dry Run.
         if dry_run {
             println!("--- DRY RUN: Селективный Пуш ---");
             println!("  Удаленный репозиторий: '{}' ({})", remote.name, remote.url);
-            println!("  Будет запущено {} нод.", count);
+            println!("  Будет отправлено {} новых нод.", nodes_to_push.len());
             println!("  Целевая Git-ссылка: {}", remote_ref_name);
-            println!("  Вершина пуша: {:?}", node_id);
-            println!("  Начальная нода в цепочке: {:?}", nodes_to_push.first().unwrap());
+            println!("  Новая вершина: {:?}", node_id);
             println!("---------------------------------");
             return Ok(true);
         }
 
-        // 4. Фактический Пуш.
+        println!("Отправка {} нод на '{}'...", nodes_to_push.len(), remote.name);
 
-        println!("Пуш {} нод на удаленный репозиторий '{}'...", count, remote.name);
-
-        // Делегируем низкоуровневую Git-работу бэкенду.
         self.backend.push_update_ref(remote, node_id, &remote_ref_name)?;
 
-        println!("Успешный пуш. Удаленная ссылка {} обновлена до {:?}", remote_ref_name, node_id);
-
-        // NOTE: Здесь можно добавить логику плагинов (PluginManager) для post-push хуков.
+        println!("Успешно обновлена ссылка {} -> {:?}", remote_ref_name, node_id);
 
         Ok(true)
     }

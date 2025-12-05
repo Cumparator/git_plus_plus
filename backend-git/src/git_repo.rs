@@ -3,8 +3,8 @@ use std::process::{Command, Output};
 use std::error::Error;
 use std::collections::HashMap;
 
-use crate::types::{NodeId, RemoteRef, Author};
-use crate::backend::RepoBackend;
+use gpp_core::types::{NodeId, RemoteRef, Author};
+use gpp_core::backend::RepoBackend;
 
 /// Конкретная реализация `RepoBackend`, использующая утилиту CLI `git`.
 ///

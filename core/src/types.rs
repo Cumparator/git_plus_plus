@@ -1,17 +1,10 @@
-// git_plus_plus/core/src/types.rs
-
 use serde::{Serialize, Deserialize};
-// Используем HashMap и HashSet для эффективного хранения данных.
 use std::collections::{HashMap, HashSet};
-// Импортируем типы DateTime и Utc для работы со временем.
+use std::hash::{Hash, Hasher};
 use chrono::{DateTime, Utc};
-use std::hash::{Hash, Hasher}; // Требуется для ручной реализации Hash
 
-// =========================================================================
-// I. БАЗОВЫЕ АЛИАСЫ И ВСПОМОГАТЕЛЬНЫЕ СТРУКТУРЫ
-// =========================================================================
-
-/// Уникальный идентификатор ноды (NodeId), по сути, Git-хэш коммита.
+/// Уникальный идентификатор ноды (NodeId).
+/// Обычно это SHA-1 хэш Git-коммита.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub String);
 
@@ -19,115 +12,112 @@ pub struct NodeId(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CommitId(pub String);
 
-/// Информация об авторе ноды.
+/// Информация об авторе изменений.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Author {
     pub name: String,
     pub email: String,
 }
 
-/// Полезная нагрузка ноды (ссылка на состояние рабочей директории в Git-дереве).
+/// Полезная нагрузка ноды (ссылка на дерево Git).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodePayload {
+    /// Хэш объекта дерева (Git Tree ID).
     pub tree_id: String,
 }
 
-// =========================================================================
-// II. СТРУКТУРЫ ГРАФА
-// =========================================================================
 
-/// Представляет удаленный репозиторий.
-/// Не может использовать стандартный derive(Hash), так как содержит HashMap.
+/// Описание удаленного репозитория.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteRef {
     pub name: String,
     pub url: String,
-    // Спецификации для пуша/фетча. Не участвуют в хешировании.
     pub specs: HashMap<String, String>,
 }
 
-// Ручная реализация трейтов для использования RemoteRef в HashSet (см. Node::remotes)
+/// Реализация сравнения для RemoteRef (игнорируем specs)
 impl PartialEq for RemoteRef {
-    /// Сравнение RemoteRef только по имени и URL.
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name && self.url == other.url
     }
 }
 impl Eq for RemoteRef {}
 
+/// Реализация хеширования для RemoteRef (для использования в HashSet)
 impl Hash for RemoteRef {
-    /// Хеширование RemoteRef только по имени и URL.
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
         self.url.hash(state);
     }
 }
 
-
-/// Структура Тега.
+/// Тег (метка версии).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     pub name: String,
     pub created_at: DateTime<Utc>,
-    pub meta: HashMap<String,String>,
+    pub meta: HashMap<String, String>,
 }
 
-// =========================================================================
-// III. CORE STRUCTURE: NODE
-// =========================================================================
-
-/// Главная структура: Нода в графе версий Git++.
+/// Нода графа версий.
+///
+/// Это основная сущность Git++. Она хранит связи с родителями и детьми,
+/// метаданные и настройки селективного пуша (remotes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
+    /// Уникальный ID ноды.
     pub id: NodeId,
-    // Список родительских нод.
+
+    /// Список родителей (от кого произошла эта нода).
     pub parents: Vec<NodeId>,
-    // Список дочерних нод (HashSet для эффективного добавления/удаления).
+
+    /// Список детей (кто произошел от этой ноды).
     pub children: HashSet<NodeId>,
 
-    // Метаданные ноды
+    /// Автор изменений.
     pub author: Author,
+
+    /// Сообщение коммита.
     pub message: String,
+
+    /// Дата создания.
     pub created_at: DateTime<Utc>,
+
+    /// Ссылка на контент (дерево файлов).
     pub payload: NodePayload,
 
-    // Контроль Селективного Пуша: Набор разрешенных удаленных репозиториев.
+    /// **Селективный пуш**: список репозиториев, куда разрешено отправлять эту ноду.
     pub remotes: HashSet<RemoteRef>,
 
-    // Теги, ассоциированные с нодой (HashMap для быстрого поиска по имени).
+    /// Теги этой ноды.
     pub tags: HashMap<String, Tag>,
 
-    // Дополнительные метаданные
+    /// Дополнительные данные.
     pub metadata: HashMap<String, String>,
 }
 
-// Методы управления нодой.
 impl Node {
-    /// Добавляет разрешение на пуш для указанного удаленного репозитория.
+    /// Добавляет разрешение на пуш в указанный remote.
     pub fn add_remote(&mut self, remote: RemoteRef) {
-        // Используем HashSet::insert для гарантии уникальности.
         self.remotes.insert(remote);
     }
 
-    /// Удаляет разрешение на пуш для удаленного репозитория по его имени.
+    /// Удаляет разрешение на пуш для remote по имени.
     pub fn remove_remote(&mut self, remote_name: &str) {
-        // Используем retain, чтобы удалить RemoteRef, имя которого совпадает.
         self.remotes.retain(|r| r.name != remote_name);
     }
 
-    /// Удаляет все разрешения на пуш, делая ноду и ее потомков "непушабельными".
+    /// Удаляет все разрешения на пуш (делает ноду локальной).
     pub fn remove_all_remotes(&mut self) {
         self.remotes.clear();
     }
 
-    /// Добавляет новый тег к ноде.
+    /// Добавляет тег.
     pub fn add_tag(&mut self, tag: Tag) {
-        let tag_name = tag.name.clone();
-        // Используем имя тега как ключ для предотвращения дубликатов.
-        self.tags.insert(tag_name, tag);
+        self.tags.insert(tag.name.clone(), tag);
     }
 
-    /// Удаляет тег из ноды по его имени.
+    /// Удаляет тег.
     pub fn remove_tag(&mut self, tag_name: &str) {
         self.tags.remove(tag_name);
     }

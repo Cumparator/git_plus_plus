@@ -1,6 +1,12 @@
 [package]
-name = "cli"
+name = "gpp_cli"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+clap = { version = "4.4", features = ["derive"] }
+anyhow = "1.0"
+
+gpp_core = { path = "../core" }
+backend-git = { path = "../backend-git" }
+storage-file = { path = "../storage-file" }

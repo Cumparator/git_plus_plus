@@ -4,6 +4,7 @@ use chrono::Utc;
 
 use crate::types::{Node, NodeId, Author, NodePayload, RemoteRef};
 use crate::backend::{RepoBackend, GraphOps};
+// ИЗМЕНЕНИЕ: Импортируем трейт из текущего крейта, а не из storage_file
 use crate::storage::GraphStorage;
 
 /// Основной компонент бизнес-логики Git++.
@@ -18,7 +19,7 @@ impl VersionGraph {
     ///
     /// # Arguments
     ///
-    /// * `storage` - Реализация постоянного хранилища метаданных графа.
+    /// * `storage` - Реализация постоянного хранилища метаданных графа (Box<dyn GraphStorage>).
     /// * `backend` - Реализация низкоуровневого доступа к Git.
     pub fn new(storage: Box<dyn GraphStorage>, backend: Box<dyn RepoBackend>) -> Self {
         Self { storage, backend }
@@ -60,6 +61,7 @@ impl VersionGraph {
         let commit_id = self.backend.create_commit(&tree_id, &parents, &message, &author)?;
 
         let inherited_remotes = if let Some(first_parent_id) = parents.first() {
+            // Ошибки storage автоматически конвертируются в Box<dyn Error> благодаря '?'
             let parent_node = self.storage.load_node(first_parent_id)?;
             parent_node.remotes
         } else {
