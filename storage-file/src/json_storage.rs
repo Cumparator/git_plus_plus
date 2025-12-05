@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use gpp_core::types::{Node, NodeId};
-
-use crate::{GraphStorage, StorageError, TxHandle, Result};
+use gpp_core::storage::{GraphStorage, TxHandle, StorageError, Result};
 
 pub struct JsonStorage {
     db_path: PathBuf,
@@ -31,6 +30,7 @@ impl JsonStorage {
     }
 }
 
+// Теперь это реализация правильного трейта
 impl GraphStorage for JsonStorage {
     fn persist_node(&mut self, node: &Node) -> Result<()> {
         let mut map = self.nodes.write().map_err(|_| StorageError::Tx("Lock poisoned".into()))?;

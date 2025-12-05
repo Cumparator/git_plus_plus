@@ -4,7 +4,6 @@ use chrono::Utc;
 
 use crate::types::{Node, NodeId, Author, NodePayload, RemoteRef};
 use crate::backend::{RepoBackend, GraphOps};
-// ИЗМЕНЕНИЕ: Импортируем трейт из текущего крейта, а не из storage_file
 use crate::storage::GraphStorage;
 
 /// Основной компонент бизнес-логики Git++.
@@ -61,7 +60,6 @@ impl VersionGraph {
         let commit_id = self.backend.create_commit(&tree_id, &parents, &message, &author)?;
 
         let inherited_remotes = if let Some(first_parent_id) = parents.first() {
-            // Ошибки storage автоматически конвертируются в Box<dyn Error> благодаря '?'
             let parent_node = self.storage.load_node(first_parent_id)?;
             parent_node.remotes
         } else {
@@ -94,6 +92,49 @@ impl VersionGraph {
         self.storage.commit_tx(tx)?;
 
         Ok(commit_id)
+    }
+
+    /// Добавляет разрешение на пуш (RemoteRef) для указанной ноды.
+    /// Используется командой `chrm` (Change Remote).
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - Идентификатор ноды.
+    /// * `remote` - Описание удаленного репозитория.
+    pub fn add_remote_permission(
+        &mut self,
+        node_id: &NodeId,
+        remote: RemoteRef
+    ) -> Result<(), Box<dyn Error>> {
+        let tx = self.storage.begin_tx()?;
+
+        let mut node = self.storage.load_node(node_id)?;
+        node.add_remote(remote);
+        self.storage.persist_node(&node)?;
+
+        self.storage.commit_tx(tx)?;
+        Ok(())
+    }
+
+    /// Удаляет разрешение на пуш для указанной ноды по имени репозитория.
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - Идентификатор ноды.
+    /// * `remote_name` - Имя удаленного репозитория (например, "origin").
+    pub fn remove_remote_permission(
+        &mut self,
+        node_id: &NodeId,
+        remote_name: &str
+    ) -> Result<(), Box<dyn Error>> {
+        let tx = self.storage.begin_tx()?;
+
+        let mut node = self.storage.load_node(node_id)?;
+        node.remove_remote(remote_name);
+        self.storage.persist_node(&node)?;
+
+        self.storage.commit_tx(tx)?;
+        Ok(())
     }
 }
 
