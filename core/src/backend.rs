@@ -82,6 +82,8 @@ pub trait RepoBackend {
         local_tip_id: &NodeId,
         remote_target_ref: &str
     ) -> Result<(), Box<dyn Error>>;
+
+    fn checkout_tree(&self, tree_oid: &str) -> Result<(), Box<dyn Error>>;
 }
 
 /// Трейт для получения данных ноды из графа (ReadOnly операции).

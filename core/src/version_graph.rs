@@ -136,6 +136,11 @@ impl VersionGraph {
         self.storage.commit_tx(tx)?;
         Ok(())
     }
+
+    pub fn checkout(&self, node_id: &NodeId) -> Result<(), Box<dyn Error>> {
+        let node = self.storage.load_node(node_id)?;
+        self.backend.checkout_tree(&node.payload.tree_id)?;
+        Ok(())
 }
 
 impl GraphOps for VersionGraph {

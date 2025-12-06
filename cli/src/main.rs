@@ -52,6 +52,10 @@ enum Commands {
         node: Option<String>,
         #[arg(long)]
         dry_run: bool,
+    },
+    Checkout {
+    #[arg(help = "ID ноды или тег (пока только ID)")]
+    node: String,
     }
 }
 
@@ -184,6 +188,24 @@ fn main() -> Result<()> {
                 Ok(false) => println!("Нечего пушить"),
                 Err(e) => eprintln!("Ошибка: {}", e),
             }
+        }
+
+        Commands::Checkout { node } => {
+            if !gpp_dir.exists() { anyhow::bail!("Репозиторий не найден"); }
+
+            let node_id = NodeId(node);
+            let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
+            let backend = Box::new(GitRepo::new(&current_dir));
+
+            let graph = VersionGraph::new(storage, backend);
+
+            println!("Переключение на {}...", node_id.0);
+            graph.checkout(&node_id)
+                .map_err(|e| anyhow::anyhow!("Ошибка checkout: {}", e))?;
+
+            fs::write(&head_path, node_id.0.as_bytes())?;
+
+            println!("Успешно переключено. HEAD теперь на {}", node_id.0);
         }
     }
     Ok(())

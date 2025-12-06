@@ -109,4 +109,19 @@ impl RepoBackend for GitRepo {
         self.run_git_command(&args)?;
         Ok(())
     }
+
+    fn checkout_tree(&self, tree_oid: &str) -> Result<(), Box<dyn Error>> {
+        let args = vec!["read-tree", "-u", "--reset", tree_oid];
+        let output = Command::new("git")
+            .current_dir(&self.workdir)
+            .args(&args)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Git checkout failed: {}", err).into());
+        }
+
+        Ok(())
+    }
 }
