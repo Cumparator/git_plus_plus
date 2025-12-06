@@ -136,6 +136,10 @@ impl VersionGraph {
         self.storage.commit_tx(tx)?;
         Ok(())
     }
+
+    pub fn list_roots(&self) -> Result<Vec<NodeId>, Box<dyn Error>> {
+        Ok(self.storage.list_roots()?)
+    }
 }
 
 impl GraphOps for VersionGraph {

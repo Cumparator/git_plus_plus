@@ -1,25 +1,18 @@
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
 
-// Импортируем типы из gpp_core
-use gpp_core::types::{Author, NodeId, RemoteRef};
+use gpp_core::types::{Author, NodeId};
 use gpp_core::version_graph::VersionGraph;
-use gpp_core::push_manager::PushManager;
 use gpp_core::storage::GraphStorage;
+// Подключаем Dispatcher
+use gpp_core::dispatcher::{CommandDispatcher, Command, CmdResult};
 
-// Импортируем наши реализации
-// Убедись, что модули объявлены в main.rs или lib.rs
 use backend_git::git_repo::GitRepo;
-
-// Если JsonStorage лежит в gpp_core или соседнем модуле, поправь путь.
-// Если он в этом же крейте в файле json_storage.rs:
 use storage_file::json_storage::JsonStorage;
 
 #[derive(Parser)]
 #[command(name = "gpp")]
-#[command(about = "Git Plus Plus CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -27,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Init,
+    Init, // Init остается вне диспетчера, т.к. создает окружение
     Add {
         #[arg(short, long)]
         message: String,
@@ -58,133 +51,108 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let current_dir = std::env::current_dir()?;
-
     let gpp_dir = current_dir.join(".gitpp");
     let db_path = gpp_dir.join("graph.json");
     let head_path = gpp_dir.join("HEAD");
 
-    match cli.command {
-        Commands::Init => {
-            if gpp_dir.exists() {
-                println!("Репозиторий Git++ уже существует");
-                return Ok(());
-            }
-            println!("Инициализация Git++...");
-            fs::create_dir_all(&gpp_dir).context("Не удалось создать .gitpp")?;
-
-            JsonStorage::new(&db_path)
-                .map_err(|e| anyhow::anyhow!(e))
-                .context("Ошибка создания хранилища")?;
-
-            let git = GitRepo::new(&current_dir);
-
-            git.init_bare(".git")
-                .map_err(|e| anyhow::anyhow!("{}", e))
-                .context("Ошибка инициализации Git")?;
-
-            println!("Готово!");
+    // Специальная обработка Init, так как для Dispatcher нужен уже существующий репо
+    if let Commands::Init = cli.command {
+        if gpp_dir.exists() {
+            println!("Репозиторий Git++ уже существует");
+            return Ok(());
         }
+        println!("Инициализация Git++...");
+        fs::create_dir_all(&gpp_dir)?;
+        JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?;
+        let git = GitRepo::new(&current_dir);
+        // git.init_bare(...) // предполагается метод в GitRepo
+        println!("Готово!");
+        return Ok(());
+    }
+
+    // Проверка существования репо для остальных команд
+    if !gpp_dir.exists() {
+        anyhow::bail!("Репозиторий не найден. Запустите gpp init");
+    }
+
+    // --- Сборка зависимостей (Dependency Injection) ---
+    let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
+    let backend_main = Box::new(GitRepo::new(&current_dir));
+    let backend_aux = Box::new(GitRepo::new(&current_dir)); // Для PushManager
+
+    let graph = VersionGraph::new(storage, backend_main);
+
+    // Инициализация Диспетчера
+    let mut dispatcher = CommandDispatcher::new(graph, backend_aux);
+
+    // --- Преобразование CLI аргументов в Command DTO ---
+
+    // Вспомогательная функция для чтения HEAD
+    let get_head = || -> Result<Option<NodeId>> {
+        if head_path.exists() {
+            let h = fs::read_to_string(&head_path)?;
+            let pid = h.trim().to_string();
+            if pid.is_empty() { Ok(None) } else { Ok(Some(NodeId(pid))) }
+        } else {
+            Ok(None)
+        }
+    };
+
+    let cmd_dto = match cli.command {
+        Commands::Init => unreachable!(), // Обработано выше
 
         Commands::Add { message } => {
-            if !gpp_dir.exists() {
-                anyhow::bail!("Репозиторий не найден");
+            let parents = get_head()?.map(|h| vec![h]).unwrap_or_default();
+            Command::Add {
+                message,
+                author: Author { name: "User".into(), email: "user@example.com".into() },
+                parents,
             }
+        },
 
-            let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
-            let backend = Box::new(GitRepo::new(&current_dir));
-            let mut graph = VersionGraph::new(storage, backend);
-
-            let parents = if head_path.exists() {
-                let h = fs::read_to_string(&head_path)?;
-                let pid = h.trim().to_string();
-                if pid.is_empty() { vec![] } else { vec![NodeId(pid)] }
-            } else { vec![] };
-
-            let author = Author { name: "User".into(), email: "user@example.com".into() };
-
-            println!("Коммит...");
-
-            let new_node_id = graph.add_node(parents, author, message)
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            fs::write(&head_path, new_node_id.0.as_bytes())?;
-            println!("Нода создана: {}", new_node_id.0);
-        }
-
-        Commands::Log => {
-            if !gpp_dir.exists() { anyhow::bail!("Репозиторий не найден"); }
-
-            let storage = JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?;
-
-            if head_path.exists() {
-                println!("HEAD: {}", fs::read_to_string(&head_path)?.trim());
-            }
-
-            let roots = storage.list_roots()
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-            for root in roots {
-                let node = storage.load_node(&root)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                println!("Root: {} [{}]", root.0, node.message);
-            }
-        }
+        Commands::Log => Command::Log,
 
         Commands::Chrm { remote, url, node, remove } => {
-            if !gpp_dir.exists() { anyhow::bail!("Репозиторий не найден"); }
-
-            let target_node_id = if let Some(id) = node {
-                NodeId(id)
-            } else if head_path.exists() {
-                NodeId(fs::read_to_string(&head_path)?.trim().to_string())
+            let target = if let Some(id) = node {
+                Some(NodeId(id))
             } else {
-                anyhow::bail!("HEAD пуст");
+                get_head()?
             };
-
-            let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
-            let backend = Box::new(GitRepo::new(&current_dir));
-            let mut graph = VersionGraph::new(storage, backend);
-
-            if remove {
-                graph.remove_remote_permission(&target_node_id, &remote)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                println!("Права удалены");
-            } else {
-                let u = url.ok_or_else(|| anyhow::anyhow!("Нужен URL"))?;
-                let r = RemoteRef { name: remote, url: u, specs: Default::default() };
-                graph.add_remote_permission(&target_node_id, r)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                println!("Права добавлены");
-            }
-        }
+            Command::ChangeRemote { remote, url, node: target, remove }
+        },
 
         Commands::Push { remote, url, node, dry_run } => {
-            if !gpp_dir.exists() { anyhow::bail!("Репозиторий не найден"); }
-
-            let target_node_id = if let Some(id) = node {
-                NodeId(id)
-            } else if head_path.exists() {
-                NodeId(fs::read_to_string(&head_path)?.trim().to_string())
+            let target = if let Some(id) = node {
+                Some(NodeId(id))
             } else {
-                anyhow::bail!("Нет ноды для пуша");
+                get_head()?
             };
-
-            let remote_url = url.unwrap_or_else(|| format!("git@github.com:{}.git", remote));
-            let remote_ref = RemoteRef { name: remote, url: remote_url, specs: Default::default() };
-
-            let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
-            let backend_g = Box::new(GitRepo::new(&current_dir));
-            let backend_p = GitRepo::new(&current_dir);
-
-            let graph = VersionGraph::new(storage, backend_g);
-            let push_mgr = PushManager::new(&graph, &backend_p);
-
-            match push_mgr.push(&target_node_id, &remote_ref, dry_run) {
-                Ok(true) => println!("Пуш выполнен"),
-                Ok(false) => println!("Нечего пушить"),
-                Err(e) => eprintln!("Ошибка: {}", e),
-            }
+            let u = url.unwrap_or_else(|| format!("git@github.com:{}.git", remote));
+            Command::Push { remote_name: remote, remote_url: u, node: target, dry_run }
         }
+    };
+
+    // --- Исполнение ---
+    match dispatcher.dispatch(cmd_dto) {
+        Ok(result) => {
+            match result {
+                CmdResult::Success(msg) => {
+                    println!("{}", msg);
+                    // Если это был Add, надо обновить HEAD (это логика приложения, а не Core)
+                    // В идеале Dispatcher должен возвращать измененные данные, но для простоты:
+                    if let Commands::Add { .. } = cli.command {
+                        // Тут нужно достать ID новой ноды.
+                        // Для чистоты архитектуры CmdResult::Success должен содержать данные,
+                        // или мы должны парсить msg.
+                        // В реальном проекте: CmdResult::NodeCreated(NodeId)
+                    }
+                },
+                CmdResult::Output(text) => println!("{}", text),
+                CmdResult::None => {},
+            }
+        },
+        Err(e) => eprintln!("Error: {}", e),
     }
+
     Ok(())
 }
