@@ -6,6 +6,8 @@
 *.so
 *.dylib
 
+/test
+
 # Файлы Cargo
 Cargo.lock
 

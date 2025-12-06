@@ -79,7 +79,7 @@ impl VersionGraph {
             metadata: HashMap::new(),
         };
 
-        let mut tx = self.storage.begin_tx()?;
+        let tx = self.storage.begin_tx()?;
 
         self.storage.persist_node(&node)?;
 

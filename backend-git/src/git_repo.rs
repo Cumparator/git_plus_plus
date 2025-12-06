@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::error::Error;
 use std::fs;
-
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
 #[cfg(windows)]
@@ -22,33 +21,73 @@ impl GitRepo {
         }
     }
 
-    /// Переключение симлинка .git на нужный backend
-    /// Если remote_name = None, переключаем на дефолтный (например .git_primary или просто удаляем линк)
+    /// Вспомогательный метод для запуска git команд
+    fn run_git_command(&self, args: &[&str]) -> Result<String, Box<dyn Error>> {
+        let mut command = Command::new("git");
+        command.current_dir(&self.workdir);
+        command.env("GIT_DIR", self.workdir.join(".git"));
+        command.env("GIT_WORK_TREE", &self.workdir);
+        // command.env("GIT_CONFIG_NOSYSTEM", "1");
+        command.args(args);
+
+        let output = command.output()?;
+
+        if !output.status.success() {
+            let error_msg = format!(
+                "Git error cmd='git {:?}': {}",
+                args,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return Err(error_msg.into());
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
     pub fn switch_context(&self, remote_name: &str) -> Result<(), Box<dyn Error>> {
         let git_link = self.workdir.join(".git");
         let target_dir_name = format!(".git_{}", remote_name);
         let target_path = self.workdir.join(&target_dir_name);
 
-        if !target_path.exists() {
-            fs::create_dir_all(&target_path)?;
-            Command::new("git")
-                .args(&["init", "--bare"]) // Или не bare? Для рабочей копии лучше не bare.
-                .current_dir(&target_path)
-                .output()?;
-        }
-
-        // Удаляем старый симлинк
-        if git_link.exists() || fs::symlink_metadata(&git_link).is_ok() {
-            if git_link.is_dir() && !fs::symlink_metadata(&git_link)?.file_type().is_symlink() {
-                return Err("Found a real .git directory, please rename it to .git_origin manually first".into());
+        let remove_git_link_or_dir = || -> Result<(), std::io::Error> {
+            if let Ok(meta) = fs::symlink_metadata(&git_link) {
+                if meta.file_type().is_dir() {
+                    #[cfg(unix)]
+                    fs::remove_file(&git_link)?;
+                    #[cfg(windows)]
+                    {
+                        if meta.is_symlink() {
+                            fs::remove_dir(&git_link)?;
+                        } else {
+                            fs::remove_dir_all(&git_link)?;
+                        }
+                    }
+                } else {
+                    fs::remove_file(&git_link)?;
+                }
             }
-            #[cfg(unix)]
-            fs::remove_file(&git_link).ok();
-            #[cfg(windows)]
-            fs::remove_dir(&git_link).ok();
+            Ok(())
+        };
+
+        remove_git_link_or_dir()?;
+
+        if !target_path.exists() {
+            let temp_git = self.workdir.join(".git_temp_init");
+            if temp_git.exists() {
+                fs::remove_dir_all(&temp_git)?;
+            }
+
+            Command::new("git")
+                .arg("init")
+                .current_dir(&self.workdir)
+                .output()?;
+
+            fs::rename(&git_link, &target_path)?;
+        } else {
+            // TODO: exception
         }
 
-        // Создаем новый симлинк .git -> .git_origin
+        // 3. Создаем симлинк .git -> .git_origin
         match symlink(&target_path, &git_link) {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Failed to link .git to {}: {}", target_dir_name, e).into())
@@ -84,7 +123,7 @@ impl RepoBackend for GitRepo {
         tree_oid: &str,
         parents: &[NodeId],
         message: &str,
-        author: &Author
+        _author: &Author // Пока игнорируем автора для простоты, берем из git config
     ) -> Result<NodeId, Box<dyn Error>> {
         let mut args = vec!["commit-tree", tree_oid, "-m", message];
         for p in parents {
@@ -92,6 +131,7 @@ impl RepoBackend for GitRepo {
             args.push(&p.0);
         }
         let commit_hash = self.run_git_command(&args)?;
+        self.run_git_command(&vec!["update-ref", "HEAD", &commit_hash])?;
         Ok(NodeId(commit_hash))
     }
 
@@ -101,12 +141,20 @@ impl RepoBackend for GitRepo {
         local_tip_id: &NodeId,
         remote_target_ref: &str
     ) -> Result<(), Box<dyn Error>> {
-        self.switch_context(Some(&remote.name))?;
-        self.switch_context(None)?;
+        self.switch_context(&remote.name)?;
 
         let refspec = format!("{}:{}", local_tip_id.0, remote_target_ref);
         let args = vec!["push", &remote.url, &refspec];
         self.run_git_command(&args)?;
         Ok(())
+    }
+
+    fn is_repo_empty(&self) -> Result<bool, Box<dyn Error>> {
+        // Проверяем, есть ли HEAD. Если нет, репозиторий пуст.
+        let args = vec!["rev-parse", "--verify", "HEAD"];
+        match self.run_git_command(&args) {
+            Ok(_) => Ok(false),
+            Err(_) => Ok(true),
+        }
     }
 }

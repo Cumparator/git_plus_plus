@@ -1,7 +1,6 @@
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
 
 // Импортируем типы из gpp_core
 use gpp_core::types::{Author, NodeId, RemoteRef};
@@ -78,9 +77,9 @@ fn main() -> Result<()> {
 
             let git = GitRepo::new(&current_dir);
 
-            git.init_bare(".git")
+            git.switch_context("origin")
                 .map_err(|e| anyhow::anyhow!("{}", e))
-                .context("Ошибка инициализации Git")?;
+                .context("Ошибка создания контекста origin")?;
 
             println!("Готово!");
         }

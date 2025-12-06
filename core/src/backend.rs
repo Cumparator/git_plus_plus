@@ -82,6 +82,8 @@ pub trait RepoBackend {
         local_tip_id: &NodeId,
         remote_target_ref: &str
     ) -> Result<(), Box<dyn Error>>;
+
+    fn is_repo_empty(&self) -> Result<bool, Box<dyn Error>>; // костыль порожденный необходимостью иметь че-нибудь в гит для коммита
 }
 
 /// Трейт для получения данных ноды из графа (ReadOnly операции).
