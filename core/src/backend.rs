@@ -84,6 +84,8 @@ pub trait RepoBackend {
     ) -> Result<(), Box<dyn Error>>;
 
     fn is_repo_empty(&self) -> Result<bool, Box<dyn Error>>; // костыль порожденный необходимостью иметь че-нибудь в гит для коммита
+
+    fn checkout_tree(&self, tree_oid: &str) -> Result<(), Box<dyn Error>>;
 }
 
 /// Трейт для получения данных ноды из графа (ReadOnly операции).
