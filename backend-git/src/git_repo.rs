@@ -1,93 +1,58 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::error::Error;
-use std::collections::HashMap;
-use std::sync::RwLock;
+use std::fs;
+
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_dir as symlink;
 
 use gpp_core::types::{NodeId, RemoteRef, Author};
 use gpp_core::backend::RepoBackend;
 
-/// Конкретная реализация `RepoBackend`, использующая утилиту CLI `git`.
 pub struct GitRepo {
     workdir: PathBuf,
-    backend_cfg: HashMap<String, String>,
-    active_remote: RwLock<Option<String>>,
 }
 
 impl GitRepo {
     pub fn new(workdir: impl AsRef<Path>) -> Self {
-        GitRepo {
+        Self {
             workdir: workdir.as_ref().to_path_buf(),
-            backend_cfg: HashMap::new(),
-            active_remote: RwLock::new(None),
         }
     }
 
-    /// Инициализация bare-репозитория или рабочей копии для изоляции.
-    pub fn init_bare(&self, dir_name: &str) -> Result<(), Box<dyn Error>> {
-        let git_dir = self.workdir.join(dir_name);
+    /// Переключение симлинка .git на нужный backend
+    /// Если remote_name = None, переключаем на дефолтный (например .git_primary или просто удаляем линк)
+    pub fn switch_context(&self, remote_name: &str) -> Result<(), Box<dyn Error>> {
+        let git_link = self.workdir.join(".git");
+        let target_dir_name = format!(".git_{}", remote_name);
+        let target_path = self.workdir.join(&target_dir_name);
 
-        if git_dir.exists() {
-            return Ok(());
+        if !target_path.exists() {
+            fs::create_dir_all(&target_path)?;
+            Command::new("git")
+                .args(&["init", "--bare"]) // Или не bare? Для рабочей копии лучше не bare.
+                .current_dir(&target_path)
+                .output()?;
         }
 
-        let mut command = Command::new("git");
-        command.current_dir(&self.workdir);
-        command.arg("init");
-
-        if dir_name == ".git" {
-            command.output()?;
-        } else {
-            command.arg("--separate-git-dir").arg(dir_name);
-            command.output()?;
-            let git_link_file = self.workdir.join(".git");
-            if git_link_file.is_file() {
-                std::fs::remove_file(git_link_file).ok();
+        // Удаляем старый симлинк
+        if git_link.exists() || fs::symlink_metadata(&git_link).is_ok() {
+            if git_link.is_dir() && !fs::symlink_metadata(&git_link)?.file_type().is_symlink() {
+                return Err("Found a real .git directory, please rename it to .git_origin manually first".into());
             }
-        }
-        Ok(())
-    }
-
-    /// Вспомогательный метод для запуска команд.
-    fn run_git_command(&self, args: &[&str]) -> Result<String, Box<dyn Error>> {
-        let mut command = Command::new("git");
-        command.current_dir(&self.workdir);
-
-        let remote_name_opt = self.active_remote.read().unwrap().clone();
-        let git_dir_name = match remote_name_opt {
-            Some(ref name) => format!(".git_{}", name),
-            None => ".git".to_string(),
-        };
-
-        let git_dir_path = self.workdir.join(&git_dir_name);
-        command.env("GIT_DIR", &git_dir_path);
-        command.env("GIT_WORK_TREE", &self.workdir);
-
-        command.args(args);
-
-        let output = command.output()?;
-
-        if !output.status.success() {
-            let error_msg = format!(
-                "Git error (ctx={}) cmd='{:?}': {}",
-                git_dir_name,
-                args,
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-            return Err(error_msg.into());
+            #[cfg(unix)]
+            fs::remove_file(&git_link).ok();
+            #[cfg(windows)]
+            fs::remove_dir(&git_link).ok();
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    }
-
-    fn switch_context(&self, remote_name: Option<&str>) -> Result<(), Box<dyn Error>> {
-        if let Some(name) = remote_name {
-            let dir_name = format!(".git_{}", name);
-            self.init_bare(&dir_name)?;
+        // Создаем новый симлинк .git -> .git_origin
+        match symlink(&target_path, &git_link) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to link .git to {}: {}", target_dir_name, e).into())
         }
-        let mut lock = self.active_remote.write().unwrap();
-        *lock = remote_name.map(|s| s.to_string());
-        Ok(())
     }
 }
 
@@ -95,19 +60,8 @@ impl RepoBackend for GitRepo {
     fn run_cmd(&self, cmd: &str, args: Vec<&str>) -> Result<Output, Box<dyn Error>> {
         let mut command = Command::new("git");
         command.current_dir(&self.workdir);
-
-        let remote_name_opt = self.active_remote.read().unwrap().clone();
-        let git_dir_name = match remote_name_opt {
-            Some(ref name) => format!(".git_{}", name),
-            None => ".git".to_string(),
-        };
-
-        command.env("GIT_DIR", self.workdir.join(git_dir_name));
-        command.env("GIT_WORK_TREE", &self.workdir);
-
         command.arg(cmd);
         command.args(&args);
-
         Ok(command.output()?)
     }
 
