@@ -30,7 +30,6 @@ impl JsonStorage {
     }
 }
 
-// Теперь это реализация правильного трейта
 impl GraphStorage for JsonStorage {
     fn persist_node(&mut self, node: &Node) -> Result<()> {
         let mut map = self.nodes.write().map_err(|_| StorageError::Tx("Lock poisoned".into()))?;
