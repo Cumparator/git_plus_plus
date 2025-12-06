@@ -25,8 +25,6 @@ impl GitRepo {
     fn run_git_command(&self, args: &[&str]) -> Result<String, Box<dyn Error>> {
         let mut command = Command::new("git");
         command.current_dir(&self.workdir);
-        command.env("GIT_DIR", self.workdir.join(".git"));
-        command.env("GIT_WORK_TREE", &self.workdir);
         // command.env("GIT_CONFIG_NOSYSTEM", "1");
         command.args(args);
 
@@ -87,11 +85,20 @@ impl GitRepo {
             // TODO: exception
         }
 
-        // 3. Создаем симлинк .git -> .git_origin
-        match symlink(&target_path, &git_link) {
+        let target_path_rel = Path::new(&target_dir_name);
+        // Создаем симлинк .git -> .git_origin
+        #[cfg(unix)]
+        let symlink_result = std::os::unix::fs::symlink(target_path_rel, &git_link);
+        #[cfg(not(unix))]
+        let symlink_result = std::os::windows::fs::symlink_dir(target_path_rel, &git_link);
+        match symlink_result {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Failed to link .git to {}: {}", target_dir_name, e).into())
         }
+    }
+
+    fn get_index_lock_path(&self) -> std::path::PathBuf {
+        self.workdir.join(".git").join("index.lock")
     }
 }
 
@@ -159,6 +166,12 @@ impl RepoBackend for GitRepo {
     }
 
     fn checkout_tree(&self, tree_oid: &str) -> Result<(), Box<dyn Error>> {
+        // let lock_path = self.get_index_lock_path();
+        //
+        // if lock_path.exists() {
+        //     fs::remove_file(&lock_path).ok();
+        //     println!("DEBUG: Successfully removed stale index.lock.");
+        // }
         let args = vec!["read-tree", "-u", "--reset", tree_oid];
         let output = Command::new("git")
             .current_dir(&self.workdir)

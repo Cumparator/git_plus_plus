@@ -14,3 +14,4 @@ thiserror = "1.0"
 gpp_core = { path = "../core" }
 backend-git = { path = "../backend-git" }
 storage-file = { path = "../storage-file" }
+tracing-subscriber = "0.3.22"

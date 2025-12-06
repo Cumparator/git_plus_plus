@@ -16,6 +16,8 @@ use backend_git::git_repo::GitRepo;
 // Если он в этом же крейте в файле json_storage.rs:
 use storage_file::json_storage::JsonStorage;
 
+use tracing_subscriber;
+
 #[derive(Parser)]
 #[command(name = "gpp")]
 #[command(about = "Git Plus Plus CLI", long_about = None)]
@@ -59,6 +61,7 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
     let current_dir = std::env::current_dir()?;
 
@@ -85,9 +88,23 @@ fn main() -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("{}", e))
                 .context("Ошибка создания контекста origin")?;
 
+            use std::io::Write;
+            let exclude_path = current_dir.join(".git").join("info").join("exclude");
+
+            fs::create_dir_all(exclude_path.parent().unwrap())?;
+
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .append(true)
+                .create(true)
+                .open(&exclude_path)?;
+
+            writeln!(file, ".gitpp")?;
+            writeln!(file, ".git_origin")?;
+            writeln!(file, ".git_*")?;
+
             println!("Готово!");
         }
-
         Commands::Add { message } => {
             if !gpp_dir.exists() {
                 anyhow::bail!("Репозиторий не найден");
