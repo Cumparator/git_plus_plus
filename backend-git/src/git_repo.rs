@@ -48,27 +48,14 @@ impl GitRepo {
         let target_dir_name = format!(".git_{}", remote_name);
         let target_path = self.workdir.join(&target_dir_name);
 
-        let remove_git_link_or_dir = || -> Result<(), std::io::Error> {
-            if let Ok(meta) = fs::symlink_metadata(&git_link) {
-                if meta.file_type().is_dir() {
-                    #[cfg(unix)]
-                    fs::remove_file(&git_link)?;
-                    #[cfg(windows)]
-                    {
-                        if meta.is_symlink() {
-                            fs::remove_dir(&git_link)?;
-                        } else {
-                            fs::remove_dir_all(&git_link)?;
-                        }
-                    }
-                } else {
-                    fs::remove_file(&git_link)?;
+        // такой огород потому что симлинки удаляются на винде и в линуксе по-разному
+        if git_link.exists() || fs::symlink_metadata(&git_link).is_ok() {
+            if let Err(_) = fs::remove_file(&git_link) {
+                if let Err(e) = fs::remove_dir(&git_link) {
+                    return Err(format!("Failed to remove existing .git link: {}", e).into());
                 }
             }
-            Ok(())
-        };
-
-        remove_git_link_or_dir()?;
+        }
 
         if !target_path.exists() {
             let temp_git = self.workdir.join(".git_temp_init");
@@ -82,20 +69,34 @@ impl GitRepo {
                 .output()?;
 
             fs::rename(&git_link, &target_path)?;
-        } else {
-            // TODO: exception
         }
 
-        let target_path_rel = Path::new(&target_dir_name);
-        // Создаем симлинк .git -> .git_origin
         #[cfg(unix)]
-        let symlink_result = std::os::unix::fs::symlink(target_path_rel, &git_link);
-        #[cfg(not(unix))]
-        let symlink_result = std::os::windows::fs::symlink_dir(target_path_rel, &git_link);
-        match symlink_result {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed to link .git to {}: {}", target_dir_name, e).into())
+        {
+            std::os::unix::fs::symlink(Path::new(&target_dir_name), &git_link)?;
         }
+
+        #[cfg(windows)]
+        {
+            // Windows: Используем Junction Point через mklink /J.
+            // Это обходит требование прав администратора (os error 5).
+            // Мы вызываем cmd, так как в std нет нативной поддержки junction без сторонних крейтов.
+            // короче говоря сраная винда как всегда суёт костыли в колёса
+            let status = Command::new("cmd")
+                .args(["/C", "mklink", "/J", ".git", &target_dir_name])
+                .current_dir(&self.workdir)
+                .output()?
+                .status;
+
+            if !status.success() {
+                return Err(format!(
+                    "Failed to create junction for context '{}'. Ensure you are not blocking .git folder.",
+                    remote_name
+                ).into());
+            }
+        }
+
+        Ok(())
     }
 
     fn get_index_lock_path(&self) -> std::path::PathBuf {
