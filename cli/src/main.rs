@@ -28,6 +28,10 @@ enum Commands {
     Add {
         #[arg(short, long)]
         message: String,
+        #[arg(short, long)]
+        parents: Option<Vec<String>>,
+        #[arg(short, long, num_args = 0..)]
+        remotes: Option<Vec<String>>,
     },
     Log,
     Chrm {
@@ -72,6 +76,7 @@ fn main() -> Result<()> {
         }
         println!("Инициализация Git++...");
         fs::create_dir_all(&gpp_dir).context("Не удалось создать .gitpp")?;
+        fs::write(&db_path, "{}").context("Не удалось создать graph.json")?;
 
         JsonStorage::new(&db_path)
             .map_err(|e| anyhow::anyhow!(e))
@@ -146,12 +151,19 @@ fn main() -> Result<()> {
     let cmd_dto = match &cli.command {
         Commands::Init { .. } => unreachable!(),
 
-        Commands::Add { message } => {
-            let parents = get_head()?.map(|h| vec![h]).unwrap_or_default();
+        Commands::Add { message, parents, remotes } => {
+            // Определяем родителей: либо то, что передал юзер, либо HEAD
+            let resolved_parents = if let Some(p_list) = parents {
+                p_list.iter().map(|s| NodeId(s.clone())).collect()
+            } else {
+                get_head()?.map(|h| vec![h]).unwrap_or_default()
+            };
+
             Command::Add {
                 message: message.clone(),
                 author: Author { name: "User".into(), email: "user@example.com".into() },
-                parents,
+                parents: resolved_parents,
+                target_remotes: remotes.clone(),
             }
         },
 
@@ -196,15 +208,17 @@ fn main() -> Result<()> {
             match result {
                 CmdResult::Success(msg) => {
                     println!("{}", msg);
-                    // Если это был Add, надо обновить HEAD (это логика приложения, а не Core)
-                    // В идеале Dispatcher должен возвращать измененные данные, но для простоты:
-                    match &cli.command {
-                        Commands::Checkout { node } => {
-                            fs::write(&head_path, node.as_bytes())?;
-                        },
-                        // Для Add обновление HEAD пока оставим "как есть" (нужно парсить msg или менять return type),
-                        // но для Checkout это критично.
-                        _ => {}
+                    // Dispatcher возвращает строку "Node created: <HASH>", парсим её.
+                    if let Commands::Add { .. } = &cli.command {
+                        if let Some(id) = msg.strip_prefix("Node created: ") {
+                            fs::write(&head_path, id.trim())?;
+                        }
+                    }
+
+                    if let Commands::Checkout { node } = &cli.command {
+                        // Тут node может быть тегом, но пока считаем ID
+                        // Лучше брать ID из результата dispatcher, но пока так:
+                        fs::write(&head_path, node)?;
                     }
                 },
                 CmdResult::Output(text) => println!("{}", text),

@@ -21,6 +21,7 @@ pub enum Command {
         message: String,
         author: Author,
         parents: Vec<NodeId>,
+        target_remotes: Option<Vec<String>>,
     },
     Log,
     Checkout {
@@ -90,8 +91,8 @@ impl CommandDispatcher {
 
     pub fn dispatch(&mut self, cmd: Command) -> Result<CmdResult, Box<dyn Error>> {
         match cmd {
-            Command::Add { message, author, parents } => {
-                let node_id = self.graph.add_node(parents, author, message)?;
+            Command::Add { message, author, parents, target_remotes } => {
+                let node_id = self.graph.add_node(parents, author, message, target_remotes)?;
                 Ok(CmdResult::Success(format!("Node created: {}", node_id.0)))
             }
 

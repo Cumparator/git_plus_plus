@@ -21,17 +21,73 @@ impl VersionGraph {
         parents: Vec<NodeId>,
         author: Author,
         message: String,
+        requested_remotes: Option<Vec<String>>,
     ) -> Result<NodeId, Box<dyn Error>> {
-        let tree_id = self.backend.create_tree()?;
 
-        let commit_id = self.backend.create_commit(&tree_id, &parents, &message, &author)?;
+        // Собираем все допустимые ремоуты от родителей (Union)
+        let mut allowed_remotes: HashMap<String, RemoteRef> = HashMap::new();
 
-        let inherited_remotes = if let Some(first_parent_id) = parents.first() {
-            let parent_node = self.storage.load_node(first_parent_id)?;
-            parent_node.remotes
+        for parent_id in &parents {
+            let p_node = self.storage.load_node(parent_id)?;
+            for remote in p_node.remotes {
+                // надо проверять на конфликт URL, но пока пропустим.
+                allowed_remotes.insert(remote.name.clone(), remote);
+            }
+        }
+
+        // 2. Определяем итоговый список ремоутов для новой ноды
+        let final_remotes: HashSet<RemoteRef> = if let Some(req_names) = requested_remotes {
+            // Ветка А: Пользователь явно запросил конкретные ремоуты
+            let mut result = HashSet::new();
+
+            if parents.is_empty() {
+                // Edge Case: Корневая нода (нет родителей).
+                // Мы не можем валидировать "наследие".
+                // Тут архитектурный вопрос: откуда брать URL для RemoteRef?
+                // Для простоты, если это корень, разрешаем создавать RemoteRef без URL (или с пустым).
+                for name in req_names {
+                    result.insert(RemoteRef {
+                        name,
+                        url: "".to_string(), // TODO: Надо бы брать из git config
+                        specs: Default::default(),
+                    });
+                }
+            } else {
+                // Стандартный случай: Валидация подмножества
+                for name in req_names {
+                    match allowed_remotes.get(&name) {
+                        Some(r_ref) => {
+                            result.insert(r_ref.clone());
+                        },
+                        None => {
+                            return Err(format!(
+                                "Validation Error: Remote '{}' is not present in parent nodes. \
+                                Cannot extend history seamlessly. Parents have: {:?}",
+                                name,
+                                allowed_remotes.keys().collect::<Vec<_>>()
+                            ).into());
+                        }
+                    }
+                }
+            }
+            result
         } else {
-            HashSet::new()
+            // Ветка Б: Пользователь ничего не указал -> Наследуем ВСЁ (Union)
+            if parents.is_empty() {
+                // Если корень и не указали ремоутов -> наверно "origin"?
+                HashSet::from([RemoteRef {
+                    name: "origin".into(),
+                    url: "".into(),
+                    specs: Default::default()
+                }])
+            } else {
+                allowed_remotes.into_values().collect()
+            }
         };
+
+        // TODO: Здесь есть проблема. create_commit пишет в ТЕКУЩИЙ активный контекст.
+        let tree_id = self.backend.create_tree()?;
+        let commit_id = self.backend.create_commit(&tree_id, &parents, &message, &author)?;
 
         let node = Node {
             id: commit_id.clone(),
@@ -41,13 +97,12 @@ impl VersionGraph {
             message,
             created_at: Utc::now(),
             payload: NodePayload { tree_id },
-            remotes: inherited_remotes,
+            remotes: final_remotes,
             tags: HashMap::new(),
             metadata: HashMap::new(),
         };
 
         let tx = self.storage.begin_tx()?;
-
         self.storage.persist_node(&node)?;
 
         for parent_id in &parents {
@@ -55,7 +110,6 @@ impl VersionGraph {
             p_node.children.insert(commit_id.clone());
             self.storage.persist_node(&p_node)?;
         }
-
         self.storage.commit_tx(tx)?;
 
         Ok(commit_id)

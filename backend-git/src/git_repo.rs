@@ -58,17 +58,7 @@ impl GitRepo {
         }
 
         if !target_path.exists() {
-            let temp_git = self.workdir.join(".git_temp_init");
-            if temp_git.exists() {
-                fs::remove_dir_all(&temp_git)?;
-            }
-
-            Command::new("git")
-                .arg("init")
-                .current_dir(&self.workdir)
-                .output()?;
-
-            fs::rename(&git_link, &target_path)?;
+            self.init_context(remote_name, None)?;
         }
 
         #[cfg(unix)]
@@ -111,10 +101,18 @@ impl GitRepo {
             return Ok(());
         }
 
-        fs::create_dir_all(&target_path)?;
+        let output = Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg(&target_path)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(format!("Git init failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+        }
 
         Command::new("git")
-            .arg("init")
+            .args(&["config", "core.bare", "false"])
             .current_dir(&target_path)
             .output()?;
 
@@ -126,7 +124,7 @@ impl GitRepo {
         }
 
         Command::new("git")
-            .args(&["config", "core.worktree", ".."])
+            .args(&["symbolic-ref", "HEAD", "refs/heads/main"])
             .current_dir(&target_path)
             .output()?;
 
@@ -180,7 +178,7 @@ impl RepoBackend for GitRepo {
         local_tip_id: &NodeId,
         remote_target_ref: &str
     ) -> Result<(), Box<dyn Error>> {
-        self.switch_context(&remote.name)?;
+        //self.switch_context(&remote.name)?;
 
         let refspec = format!("{}:{}", local_tip_id.0, remote_target_ref);
         let args = vec!["push", &remote.url, &refspec];
