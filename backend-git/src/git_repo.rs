@@ -150,7 +150,7 @@ impl RepoBackend for GitRepo {
         local_tip_id: &NodeId,
         remote_target_ref: &str
     ) -> Result<(), Box<dyn Error>> {
-        self.switch_context(&remote.name)?;
+        //self.switch_context(&remote.name)?;
 
         let refspec = format!("{}:{}", local_tip_id.0, remote_target_ref);
         let args = vec!["push", &remote.url, &refspec];
