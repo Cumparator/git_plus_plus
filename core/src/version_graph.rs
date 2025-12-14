@@ -142,6 +142,10 @@ impl VersionGraph {
         self.backend.checkout_tree(&node.payload.tree_id)?;
         Ok(())
     }
+
+    pub fn list_roots(&self) -> Result<Vec<NodeId>, Box<dyn Error>> {
+        Ok(self.storage.list_roots()?)
+    }
 }
 
 impl GraphOps for VersionGraph {
