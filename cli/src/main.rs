@@ -21,7 +21,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Init,
+    Init {
+        #[arg(num_args = 0.., help = "Список контекстов (remotes) в формате name или name=url")]
+        remotes: Vec<String>,
+    },
     Add {
         #[arg(short, long)]
         message: String,
@@ -62,7 +65,7 @@ fn main() -> Result<()> {
     let head_path = gpp_dir.join("HEAD");
 
     // Специальная обработка Init, так как для Dispatcher нужен уже существующий репо
-    if let Commands::Init = cli.command {
+    if let Commands::Init { remotes } = cli.command {
         if gpp_dir.exists() {
             println!("Репозиторий Git++ уже существует");
             return Ok(());
@@ -76,15 +79,34 @@ fn main() -> Result<()> {
 
         let git = GitRepo::new(&current_dir);
 
-        git.switch_context("origin")
-            .map_err(|e| anyhow::anyhow!("{}", e))
-            .context("Ошибка создания контекста origin")?;
+        let targets: Vec<String> = if remotes.is_empty() {
+            vec!["origin".to_string()]
+        } else {
+            remotes
+        };
 
+        for (i, target_spec) in targets.iter().enumerate() {
+            let (name, url) = match target_spec.split_once('=') {
+                Some((n, u)) => (n, Some(u)),
+                None => (target_spec.as_str(), None),
+            };
+
+            println!("Настройка контекста '{}'...", name);
+
+            git.init_context(name, url)
+                .map_err(|e| anyhow::anyhow!("Failed to init context {}: {}", name, e))?;
+
+            if i == 0 {
+                git.switch_context(name)
+                    .map_err(|e| anyhow::anyhow!("Failed to switch to {}: {}", name, e))?;
+            }
+        }
+
+        // Обновляем .git/info/exclude (чтобы git игнорировал папки других контекстов)
         let exclude_path = current_dir.join(".git").join("info").join("exclude");
         if let Some(parent) = exclude_path.parent() {
             fs::create_dir_all(parent)?;
         }
-
         let mut file = fs::OpenOptions::new()
             .write(true)
             .append(true)
@@ -92,7 +114,6 @@ fn main() -> Result<()> {
             .open(&exclude_path)?;
 
         writeln!(file, ".gitpp")?;
-        writeln!(file, ".git_origin")?;
         writeln!(file, ".git_*")?;
 
         println!("Готово!");
@@ -123,7 +144,7 @@ fn main() -> Result<()> {
     };
 
     let cmd_dto = match &cli.command {
-        Commands::Init => unreachable!(),
+        Commands::Init { .. } => unreachable!(),
 
         Commands::Add { message } => {
             let parents = get_head()?.map(|h| vec![h]).unwrap_or_default();

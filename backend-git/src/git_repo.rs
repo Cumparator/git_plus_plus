@@ -102,6 +102,36 @@ impl GitRepo {
     fn get_index_lock_path(&self) -> std::path::PathBuf {
         self.workdir.join(".git").join("index.lock")
     }
+
+    pub fn init_context(&self, name: &str, url: Option<&str>) -> Result<(), Box<dyn Error>> {
+        let target_dir_name = format!(".git_{}", name);
+        let target_path = self.workdir.join(&target_dir_name);
+
+        if target_path.exists() {
+            return Ok(());
+        }
+
+        fs::create_dir_all(&target_path)?;
+
+        Command::new("git")
+            .arg("init")
+            .current_dir(&target_path)
+            .output()?;
+
+        if let Some(u) = url {
+            Command::new("git")
+                .args(&["remote", "add", "origin", u])
+                .current_dir(&target_path)
+                .output()?;
+        }
+
+        Command::new("git")
+            .args(&["config", "core.worktree", ".."])
+            .current_dir(&target_path)
+            .output()?;
+
+        Ok(())
+    }
 }
 
 impl RepoBackend for GitRepo {
