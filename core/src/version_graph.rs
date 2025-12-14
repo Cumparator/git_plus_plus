@@ -6,49 +6,16 @@ use crate::types::{Node, NodeId, Author, NodePayload, RemoteRef};
 use crate::backend::{RepoBackend, GraphOps};
 use crate::storage::GraphStorage;
 
-/// Основной компонент бизнес-логики Git++.
-/// Отвечает за управление графом версий, создание нод и координацию между хранилищем и Git-бэкендом.
 pub struct VersionGraph {
     storage: Box<dyn GraphStorage>,
     backend: Box<dyn RepoBackend>,
 }
 
 impl VersionGraph {
-    /// Создает новый экземпляр графа версий.
-    ///
-    /// # Arguments
-    ///
-    /// * `storage` - Реализация постоянного хранилища метаданных графа (Box<dyn GraphStorage>).
-    /// * `backend` - Реализация низкоуровневого доступа к Git.
     pub fn new(storage: Box<dyn GraphStorage>, backend: Box<dyn RepoBackend>) -> Self {
         Self { storage, backend }
     }
 
-    /// Создает новую ноду в графе на основе текущего состояния рабочей директории.
-    ///
-    /// Метод выполняет следующие действия:
-    /// 1. Создает снимок (snapshot) рабочей директории (Git Tree).
-    /// 2. Создает физический Git-коммит.
-    /// 3. Вычисляет наследуемые права на пуш (`remotes`) от родителей.
-    /// 4. Формирует структуру `Node` и сохраняет её в хранилище.
-    /// 5. Обновляет ссылки `children` у родительских нод.
-    ///
-    /// # Arguments
-    ///
-    /// * `parents` - Список идентификаторов родительских нод.
-    /// * `author` - Данные автора изменения.
-    /// * `message` - Сообщение коммита (описание изменений).
-    ///
-    /// # Returns
-    ///
-    /// Возвращает `NodeId` только что созданной ноды.
-    ///
-    /// # Errors
-    ///
-    /// Возвращает ошибку, если:
-    /// * Не удалось выполнить Git-операции (write-tree, commit-tree).
-    /// * Не удалось записать данные в `GraphStorage`.
-    /// * Указанный родитель не найден в хранилище.
     pub fn add_node(
         &mut self,
         parents: Vec<NodeId>,
@@ -94,13 +61,6 @@ impl VersionGraph {
         Ok(commit_id)
     }
 
-    /// Добавляет разрешение на пуш (RemoteRef) для указанной ноды.
-    /// Используется командой `chrm` (Change Remote).
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - Идентификатор ноды.
-    /// * `remote` - Описание удаленного репозитория.
     pub fn add_remote_permission(
         &mut self,
         node_id: &NodeId,
@@ -116,12 +76,6 @@ impl VersionGraph {
         Ok(())
     }
 
-    /// Удаляет разрешение на пуш для указанной ноды по имени репозитория.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - Идентификатор ноды.
-    /// * `remote_name` - Имя удаленного репозитория (например, "origin").
     pub fn remove_remote_permission(
         &mut self,
         node_id: &NodeId,
@@ -139,7 +93,7 @@ impl VersionGraph {
 
     pub fn checkout(&self, node_id: &NodeId) -> Result<(), Box<dyn Error>> {
         let node = self.storage.load_node(node_id)?;
-        self.backend.checkout_tree(&node.payload.tree_id)?;
+        self.backend.checkout_node(&node)?;
         Ok(())
     }
 
@@ -148,9 +102,7 @@ impl VersionGraph {
     }
 }
 
-impl GraphOps for VersionGraph {
-    /// Получает ноду из подключенного хранилища.
-    /// Используется внешними модулями (например, PushManager) для анализа графа.
+impl GraphOps for VersionGraph { // на кой хрен было вводить graphOps я не знаю, кто-нибудь мне объясните?
     fn get_node(&self, id: &NodeId) -> Result<Node, Box<dyn Error>> {
         Ok(self.storage.load_node(id)?)
     }

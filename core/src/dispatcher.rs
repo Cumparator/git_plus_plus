@@ -23,6 +23,9 @@ pub enum Command {
         parents: Vec<NodeId>,
     },
     Log,
+    Checkout {
+        node: NodeId,
+    },
     ChangeRemote {
         remote: String,
         url: Option<String>,
@@ -92,18 +95,43 @@ impl CommandDispatcher {
                 Ok(CmdResult::Success(format!("Node created: {}", node_id.0)))
             }
 
-            Command::Log => {
-                // Log - операция чтения, используем graph как GraphOps
-                let roots = self.graph.get_roots()?; // Нужно добавить get_roots в VersionGraph или использовать storage напрямую
-                // Примечание: VersionGraph не экспонирует list_roots, поэтому добавим логику здесь
-                // или предположим расширение API VersionGraph.
-                // Для примера выведем простой текст.
+            Command::Log {} => {
                 let mut output = String::new();
-                for root in roots {
-                    let node = self.graph.get_node(&root)?;
-                    output.push_str(&format!("Root: {} [{}]\n", root.0, node.message));
+                let mut queue = std::collections::VecDeque::new();
+                let mut visited = std::collections::HashSet::new();
+
+                let roots = self.graph.list_roots()?;
+                for r in roots {
+                    queue.push_back(r);
                 }
-                Ok(CmdResult::Output(output))
+
+                while let Some(current_id) = queue.pop_front() {
+                    if !visited.insert(current_id.clone()) {
+                        continue;
+                    }
+
+                    let node = self.graph.get_node(&current_id)?;
+
+                    output.push_str(&format!("Commit: {}\n", current_id.0));
+                    output.push_str(&format!("Author: {} <{}>\n", node.author.name, node.author.email));
+                    output.push_str(&format!("Message: {}\n", node.message));
+                    output.push_str("------------------------------\n");
+
+                    for parent_id in node.parents {
+                        queue.push_back(parent_id);
+                    }
+                }
+
+                if output.is_empty() {
+                    Ok(CmdResult::Output("History is empty.".to_string()))
+                } else {
+                    Ok(CmdResult::Output(output))
+                }
+            }
+
+            Command::Checkout { node } => {
+                self.graph.checkout(&node)?;
+                Ok(CmdResult::Success(format!("HEAD is now at {}", node.0)))
             }
 
             Command::ChangeRemote { remote, url, node, remove } => {
@@ -146,17 +174,5 @@ impl CommandDispatcher {
                 }
             }
         }
-    }
-}
-
-// Расширение VersionGraph для удобства (в реальном проекте добавить в version_graph.rs)
-impl VersionGraph {
-    pub fn get_roots(&self) -> Result<Vec<NodeId>, Box<dyn Error>> {
-        // Здесь мы обращаемся к приватному storage, что недопустимо снаружи.
-        // В реальном коде нужно добавить метод `list_roots` в `VersionGraph`.
-        // Пока сделаем хак через трейт GraphStorage, если он публичный, или оставим заглушку.
-        // В рамках задания, предполагаем, что метод list_roots проксируется:
-        // self.storage.list_roots().map_err(|e| e.into())
-        Err("VersionGraph::list_roots() needs to be public".into())
     }
 }

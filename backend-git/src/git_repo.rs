@@ -9,6 +9,7 @@ use std::os::windows::fs::symlink_dir as symlink;
 
 use gpp_core::types::{NodeId, RemoteRef, Author};
 use gpp_core::backend::RepoBackend;
+use gpp_core::Node;
 
 pub struct GitRepo {
     workdir: PathBuf,
@@ -165,23 +166,24 @@ impl RepoBackend for GitRepo {
         }
     }
 
-    fn checkout_tree(&self, tree_oid: &str) -> Result<(), Box<dyn Error>> {
-        // let lock_path = self.get_index_lock_path();
-        //
-        // if lock_path.exists() {
-        //     fs::remove_file(&lock_path).ok();
-        //     println!("DEBUG: Successfully removed stale index.lock.");
-        // }
-        let args = vec!["read-tree", "-u", "--reset", tree_oid];
-        let output = Command::new("git")
-            .current_dir(&self.workdir)
-            .args(&args)
-            .output()?;
+    fn checkout_node(&self, node: &Node) -> Result<(), Box<dyn Error>> {
+        let target_context = if let Some(remote) = node.remotes.iter().next() {
+            &remote.name
+        } else {
+            "origin"
+        };
 
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Git checkout failed: {}", err).into());
+        println!("DEBUG: Node {} belongs to '{}'. Switching...", node.id.0, target_context);
+
+        self.switch_context(target_context)?;
+
+        let lock_path = self.get_index_lock_path();
+        if lock_path.exists() {
+            fs::remove_file(&lock_path).ok();
         }
+
+        let args = vec!["read-tree", "-u", "--reset", &node.payload.tree_id];
+        self.run_git_command(&args)?;
 
         Ok(())
     }
