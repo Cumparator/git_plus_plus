@@ -15,3 +15,10 @@ gpp_core = { path = "../core" }
 backend-git = { path = "../backend-git" }
 storage-file = { path = "../storage-file" }
 tracing-subscriber = "0.3.22"
+
+
+[dev-dependencies]
+assert_cmd = "2.0"   # Позволяет находить и запускать бинарник cargo
+predicates = "3.0"   # Для проверок (assert) вывода (stdout/stderr)
+tempfile = "3.8"     # Для создания временных директорий, которые сами удаляются
+walkdir = "2.4"      # Удобно смотреть структуру файлов рекурсивно (опционально)
