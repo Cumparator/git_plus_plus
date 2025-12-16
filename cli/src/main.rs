@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use std::fs;
-use std::io::Write; // Нужно для записи в .git/info/exclude
+use std::io::Write;
+use colored::*; // <--- Цвет
+use dialoguer::{Input}; // <--- Интерактивность
 
 use gpp_core::types::{Author, NodeId};
 use gpp_core::version_graph::VersionGraph;
@@ -22,12 +24,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Init {
-        #[arg(num_args = 0.., help = "Список контекстов (remotes) в формате name или name=url")]
+        #[arg(num_args = 0.., help = "Список контекстов (remotes)")]
         remotes: Vec<String>,
     },
     Add {
         #[arg(short, long)]
-        message: String,
+        message: Option<String>, // <--- Стал Option
         #[arg(short, long)]
         parents: Option<Vec<String>>,
         #[arg(short, long, num_args = 0..)]
@@ -55,7 +57,7 @@ enum Commands {
         dry_run: bool,
     },
     Checkout {
-        #[arg(help = "ID ноды или тег (пока только ID)")]
+        #[arg(help = "ID ноды")]
         node: String,
     }
 }
@@ -68,20 +70,17 @@ fn main() -> Result<()> {
     let db_path = gpp_dir.join("graph.json");
     let head_path = gpp_dir.join("HEAD");
 
-    // Специальная обработка Init, так как для Dispatcher нужен уже существующий репо
+    // --- INIT ---
     if let Commands::Init { remotes } = cli.command {
         if gpp_dir.exists() {
-            println!("Репозиторий Git++ уже существует");
+            println!("{}", "Репозиторий Git++ уже существует".yellow());
             return Ok(());
         }
-        println!("Инициализация Git++...");
+        println!("{}", "Инициализация Git++...".green().bold());
+        
         fs::create_dir_all(&gpp_dir).context("Не удалось создать .gitpp")?;
         fs::write(&db_path, "{}").context("Не удалось создать graph.json")?;
-
-        JsonStorage::new(&db_path)
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("Ошибка создания хранилища")?;
-
+        JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?;
         let git = GitRepo::new(&current_dir);
 
         let targets: Vec<String> = if remotes.is_empty() {
@@ -96,7 +95,7 @@ fn main() -> Result<()> {
                 None => (target_spec.as_str(), None),
             };
 
-            println!("Настройка контекста '{}'...", name);
+            println!("Настройка контекста '{}'...", name.cyan());
 
             git.init_context(name, url)
                 .map_err(|e| anyhow::anyhow!("Failed to init context {}: {}", name, e))?;
@@ -107,37 +106,32 @@ fn main() -> Result<()> {
             }
         }
 
-        // Обновляем .git/info/exclude (чтобы git игнорировал папки других контекстов)
+        // Обновляем .git/info/exclude
         let exclude_path = current_dir.join(".git").join("info").join("exclude");
         if let Some(parent) = exclude_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .append(true)
-            .create(true)
-            .open(&exclude_path)?;
-
+        let mut file = fs::OpenOptions::new().write(true).append(true).create(true).open(&exclude_path)?;
         writeln!(file, ".gitpp")?;
         writeln!(file, ".git_*")?;
 
-        println!("Готово!");
+        println!("{} Готово!", "SUCCESS:".green().bold());
         return Ok(());
     }
 
     if !gpp_dir.exists() {
-        anyhow::bail!("Репозиторий не найден. Запустите gpp init");
+        // Красивый вывод ошибки
+        anyhow::bail!("{} Запустите gpp init", "Репозиторий не найден.".red().bold());
     }
 
     // --- Dependency Injection ---
     let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
     let backend_main = Box::new(GitRepo::new(&current_dir));
-    let backend_aux = Box::new(GitRepo::new(&current_dir)); // Для PushManager
+    let backend_aux = Box::new(GitRepo::new(&current_dir));
 
     let graph = VersionGraph::new(storage, backend_main);
     let mut dispatcher = CommandDispatcher::new(graph, backend_aux);
 
-    // --- CLI -> Command DTO ---
     let get_head = || -> Result<Option<NodeId>> {
         if head_path.exists() {
             let h = fs::read_to_string(&head_path)?;
@@ -148,11 +142,21 @@ fn main() -> Result<()> {
         }
     };
 
+    // --- MAPPING CLI -> COMMAND ---
     let cmd_dto = match &cli.command {
         Commands::Init { .. } => unreachable!(),
 
         Commands::Add { message, parents, remotes } => {
-            // Определяем родителей: либо то, что передал юзер, либо HEAD
+            // ИНТЕРАКТИВНОСТЬ: Если нет сообщения, спрашиваем
+            let msg = match message {
+                Some(m) => m.clone(),
+                None => {
+                    Input::new()
+                        .with_prompt("Введите сообщение коммита")
+                        .interact_text()?
+                }
+            };
+            
             let resolved_parents = if let Some(p_list) = parents {
                 p_list.iter().map(|s| NodeId(s.clone())).collect()
             } else {
@@ -160,7 +164,7 @@ fn main() -> Result<()> {
             };
 
             Command::Add {
-                message: message.clone(),
+                message: msg,
                 author: Author { name: "User".into(), email: "user@example.com".into() },
                 parents: resolved_parents,
                 target_remotes: remotes.clone(),
@@ -170,11 +174,7 @@ fn main() -> Result<()> {
         Commands::Log => Command::Log,
 
         Commands::Chrm { remote, url, node, remove } => {
-            let target = if let Some(id) = node {
-                Some(NodeId(id.clone()))
-            } else {
-                get_head()?
-            };
+            let target = if let Some(id) = node { Some(NodeId(id.clone())) } else { get_head()? };
             Command::ChangeRemote {
                 remote: remote.clone(),
                 url: url.clone(),
@@ -184,11 +184,7 @@ fn main() -> Result<()> {
         },
 
         Commands::Push { remote, url, node, dry_run } => {
-            let target = if let Some(id) = node {
-                Some(NodeId(id.clone()))
-            } else {
-                get_head()?
-            };
+            let target = if let Some(id) = node { Some(NodeId(id.clone())) } else { get_head()? };
             let u = url.clone().unwrap_or_else(|| format!("git@github.com:{}.git", remote));
             Command::Push {
                 remote_name: remote.clone(),
@@ -203,21 +199,20 @@ fn main() -> Result<()> {
         }
     };
 
+    // --- DISPATCH & OUTPUT ---
     match dispatcher.dispatch(cmd_dto) {
         Ok(result) => {
             match result {
                 CmdResult::Success(msg) => {
-                    println!("{}", msg);
-                    // Dispatcher возвращает строку "Node created: <HASH>", парсим её.
+                    // Зеленый успех
+                    println!("{} {}", "SUCCESS:".green().bold(), msg);
+                    
                     if let Commands::Add { .. } = &cli.command {
                         if let Some(id) = msg.strip_prefix("Node created: ") {
                             fs::write(&head_path, id.trim())?;
                         }
                     }
-
                     if let Commands::Checkout { node } = &cli.command {
-                        // Тут node может быть тегом, но пока считаем ID
-                        // Лучше брать ID из результата dispatcher, но пока так:
                         fs::write(&head_path, node)?;
                     }
                 },
@@ -225,7 +220,12 @@ fn main() -> Result<()> {
                 CmdResult::None => {},
             }
         },
-        Err(e) => eprintln!("Error: {}", e),
+        Err(e) => {
+            // Красная ошибка
+            eprintln!("{} {}", "ERROR:".red().bold(), e);
+            // Можно не делать exit(1), чтобы anyhow сам обработал, 
+            // но так красивее
+        },
     }
 
     Ok(())

@@ -1,3 +1,4 @@
+// core/src/lib.rs
 pub mod types;
 pub mod storage;
 pub mod backend;
@@ -9,4 +10,5 @@ pub mod plugins;
 pub use types::*;
 pub use backend::*;
 pub use version_graph::*;
-pub use dispatcher::{CommandDispatcher, Command, CmdResult, CommandSpec, CommandHandler};
+// Убрали CommandSpec из списка ниже:
+pub use dispatcher::{CommandDispatcher, Command, CmdResult, CommandHandler};
