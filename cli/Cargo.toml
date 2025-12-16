@@ -10,18 +10,19 @@ chrono = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
+tracing-subscriber = "0.3.22"
 
-# --- UX (Цвет и Диалоги) ---
+# --- UX ---
 colored = "2.0"
 dialoguer = "0.10"
-# --- GUI (Графический интерфейс) ---
-eframe = "0.26.2"  # <--- ВСТАВИТЬ СЮДА
-# ------------------------------
 
+# --- GUI ---
+eframe = "0.26.2"
+
+# --- Внутренние модули ---
 gpp_core = { path = "../core" }
 backend-git = { path = "../backend-git" }
 storage-file = { path = "../storage-file" }
-tracing-subscriber = "0.3.22"
 
 [dev-dependencies]
 assert_cmd = "2.0"
