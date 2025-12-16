@@ -11,9 +11,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
 
-# --- НОВЫЕ ЗАВИСИМОСТИ (UX) ---
+# --- UX (Цвет и Диалоги) ---
 colored = "2.0"
 dialoguer = "0.10"
+# --- GUI (Графический интерфейс) ---
+eframe = "0.26.2"  # <--- ВСТАВИТЬ СЮДА
 # ------------------------------
 
 gpp_core = { path = "../core" }

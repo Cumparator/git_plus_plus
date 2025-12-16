@@ -1,9 +1,11 @@
+mod gui; // <--- НОВОЕ: Подключаем модуль GUI
+
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::Write;
-use colored::*; // <--- Цвет
-use dialoguer::{Input}; // <--- Интерактивность
+use colored::*;
+use dialoguer::{Input};
 
 use gpp_core::types::{Author, NodeId};
 use gpp_core::version_graph::VersionGraph;
@@ -29,7 +31,7 @@ enum Commands {
     },
     Add {
         #[arg(short, long)]
-        message: Option<String>, // <--- Стал Option
+        message: Option<String>,
         #[arg(short, long)]
         parents: Option<Vec<String>>,
         #[arg(short, long, num_args = 0..)]
@@ -59,7 +61,10 @@ enum Commands {
     Checkout {
         #[arg(help = "ID ноды")]
         node: String,
-    }
+    },
+    // --- НОВОЕ: Команда запуска графики ---
+    #[command(about = "Запуск графического интерфейса")]
+    Gui, 
 }
 
 fn main() -> Result<()> {
@@ -119,9 +124,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Проверка существования репозитория (для всех команд кроме init)
     if !gpp_dir.exists() {
-        // Красивый вывод ошибки
         anyhow::bail!("{} Запустите gpp init", "Репозиторий не найден.".red().bold());
+    }
+
+    // --- НОВОЕ: ОБРАБОТКА GUI ---
+    // Если выбрана команда GUI, запускаем окно и выходим, не создавая диспетчер
+    if let Commands::Gui = cli.command {
+        println!("Запуск графического интерфейса...");
+        gui::run_gui().map_err(|e| anyhow::anyhow!("GUI Error: {}", e))?;
+        return Ok(());
     }
 
     // --- Dependency Injection ---
@@ -145,6 +158,7 @@ fn main() -> Result<()> {
     // --- MAPPING CLI -> COMMAND ---
     let cmd_dto = match &cli.command {
         Commands::Init { .. } => unreachable!(),
+        Commands::Gui => unreachable!(), // Мы обработали это выше
 
         Commands::Add { message, parents, remotes } => {
             // ИНТЕРАКТИВНОСТЬ: Если нет сообщения, спрашиваем
@@ -204,7 +218,6 @@ fn main() -> Result<()> {
         Ok(result) => {
             match result {
                 CmdResult::Success(msg) => {
-                    // Зеленый успех
                     println!("{} {}", "SUCCESS:".green().bold(), msg);
                     
                     if let Commands::Add { .. } = &cli.command {
@@ -221,10 +234,7 @@ fn main() -> Result<()> {
             }
         },
         Err(e) => {
-            // Красная ошибка
             eprintln!("{} {}", "ERROR:".red().bold(), e);
-            // Можно не делать exit(1), чтобы anyhow сам обработал, 
-            // но так красивее
         },
     }
 
