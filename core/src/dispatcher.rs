@@ -1,10 +1,14 @@
 use std::error::Error;
-use std::collections::HashMap;
+// use std::collections::HashMap; // <--- Эту строку удали или закомментируй (предупреждение)
+
 use crate::version_graph::VersionGraph;
-use crate::backend::{RepoBackend, GraphOps};
+// ДОБАВИЛИ GraphOps в строку ниже:
+use crate::backend::{RepoBackend, GraphOps}; 
 use crate::push_manager::PushManager;
 use crate::types::{NodeId, Author, RemoteRef};
-use crate::plugins::PluginManager;
+use crate::plugins::{PluginManager}; 
+
+// Дальше код без изменений...
 
 /// Результат выполнения команды
 #[derive(Debug)]
@@ -35,41 +39,27 @@ pub enum Command {
     },
     Push {
         remote_name: String,
-        remote_url: String, // В реальном коде можно доставать из конфига, здесь передаем явно
+        remote_url: String,
         node: Option<NodeId>,
         dry_run: bool,
     },
-    // Custom allows plugins/extensions to pass raw args
+    // <--- Добавили поддержку кастомных команд от плагинов
     Custom {
         name: String,
         args: Vec<String>,
     }
 }
 
-/// Спецификация команды для регистрации (из диаграммы)
-pub struct CommandSpec {
-    pub name: String,
-    pub description: String,
-    pub handler: Box<dyn CommandHandler>,
-}
-
-/// Трейт для динамических обработчиков команд
 pub trait CommandHandler: Send + Sync {
     fn execute(&self, args: &[String], graph: &mut VersionGraph) -> Result<CmdResult, Box<dyn Error>>;
 }
 
 pub struct CommandDispatcher {
-    // Диспетчер владеет графом
     graph: VersionGraph,
-    // Нам нужен отдельный экземпляр backend (или clone) для операций PushManager,
-    // так как graph владеет своим backend'ом.
-    // В данном случае предполагаем, что aux_backend — это "чистый" коннектор к той же директории.
     aux_backend: Box<dyn RepoBackend>,
-
-    plugin_mgr: PluginManager,
-
-    // Реестр динамических команд
-    registry: HashMap<String, Box<dyn CommandHandler>>,
+    plugin_mgr: PluginManager, // <--- Поле менеджера
+    
+    // registry: HashMap<String, Box<dyn CommandHandler>>, // Старое поле удалили, теперь всё через plugin_mgr
 }
 
 impl CommandDispatcher {
@@ -81,12 +71,12 @@ impl CommandDispatcher {
             graph,
             aux_backend,
             plugin_mgr: PluginManager::new(),
-            registry: HashMap::new(),
         }
     }
-
-    pub fn register_command(&mut self, spec: CommandSpec) {
-        self.registry.insert(spec.name, spec.handler);
+    
+    // Метод, чтобы main.rs мог регистрировать плагины (если понадобится)
+    pub fn plugins(&mut self) -> &mut PluginManager {
+        &mut self.plugin_mgr
     }
 
     pub fn dispatch(&mut self, cmd: Command) -> Result<CmdResult, Box<dyn Error>> {
@@ -107,12 +97,9 @@ impl CommandDispatcher {
                 }
 
                 while let Some(current_id) = queue.pop_front() {
-                    if !visited.insert(current_id.clone()) {
-                        continue;
-                    }
-
+                    if !visited.insert(current_id.clone()) { continue; }
                     let node = self.graph.get_node(&current_id)?;
-
+                    
                     output.push_str(&format!("Commit: {}\n", current_id.0));
                     output.push_str(&format!("Author: {} <{}>\n", node.author.name, node.author.email));
                     output.push_str(&format!("Message: {}\n", node.message));
@@ -122,7 +109,7 @@ impl CommandDispatcher {
                         queue.push_back(parent_id);
                     }
                 }
-
+                
                 if output.is_empty() {
                     Ok(CmdResult::Output("History is empty.".to_string()))
                 } else {
@@ -151,10 +138,7 @@ impl CommandDispatcher {
 
             Command::Push { remote_name, remote_url, node, dry_run } => {
                 let target_node = node.ok_or("Node ID required for push")?;
-
-                // Создаем PushManager on-the-fly, передавая ссылки на граф и backend
                 let push_mgr = PushManager::new(&self.graph, self.aux_backend.as_ref());
-
                 let remote_ref = RemoteRef {
                     name: remote_name,
                     url: remote_url,
@@ -167,8 +151,9 @@ impl CommandDispatcher {
                 }
             }
 
+            // <--- Логика вызова плагинов
             Command::Custom { name, args } => {
-                if let Some(handler) = self.registry.get(&name) {
+                if let Some(handler) = self.plugin_mgr.get_handler(&name) {
                     handler.execute(&args, &mut self.graph)
                 } else {
                     Err(format!("Unknown command: {}", name).into())
