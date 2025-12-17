@@ -23,6 +23,7 @@ eframe = "0.26.2"
 gpp_core = { path = "../core" }
 backend-git = { path = "../backend-git" }
 storage-file = { path = "../storage-file" }
+gui = "0.6.6"
 
 [dev-dependencies]
 assert_cmd = "2.0"
