@@ -1,5 +1,4 @@
-mod gui; // <--- НОВОЕ: Подключаем модуль GUI
-
+mod gui;
 use clap::{Parser, Subcommand};
 use anyhow::{Context, Result};
 use std::fs;
@@ -64,7 +63,7 @@ enum Commands {
     },
     // --- НОВОЕ: Команда запуска графики ---
     #[command(about = "Запуск графического интерфейса")]
-    Gui, 
+    Gui,
 }
 
 fn main() -> Result<()> {
@@ -82,7 +81,7 @@ fn main() -> Result<()> {
             return Ok(());
         }
         println!("{}", "Инициализация Git++...".green().bold());
-        
+
         fs::create_dir_all(&gpp_dir).context("Не удалось создать .gitpp")?;
         fs::write(&db_path, "{}").context("Не удалось создать graph.json")?;
         JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?;
@@ -170,7 +169,7 @@ fn main() -> Result<()> {
                         .interact_text()?
                 }
             };
-            
+
             let resolved_parents = if let Some(p_list) = parents {
                 p_list.iter().map(|s| NodeId(s.clone())).collect()
             } else {
@@ -219,7 +218,7 @@ fn main() -> Result<()> {
             match result {
                 CmdResult::Success(msg) => {
                     println!("{} {}", "SUCCESS:".green().bold(), msg);
-                    
+
                     if let Commands::Add { .. } = &cli.command {
                         if let Some(id) = msg.strip_prefix("Node created: ") {
                             fs::write(&head_path, id.trim())?;
@@ -235,6 +234,7 @@ fn main() -> Result<()> {
         },
         Err(e) => {
             eprintln!("{} {}", "ERROR:".red().bold(), e);
+            std::process::exit(1);
         },
     }
 
