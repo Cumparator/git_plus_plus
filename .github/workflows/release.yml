@@ -1,0 +1,21 @@
+name: min release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo build --release --target x86_64-unknown-linux-gnu -p gpp_cli
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GITHUB_ACTOR: ${{ github.actor }}
+
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: target/x86_64-unknown-linux-gnu/release/gpp_cli
