@@ -1,9 +1,20 @@
+name: Update Metrics
+on:
+  push:
+    branches:
+      - master
+
 jobs:
-  build:
+  track:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Run tests
-        run: cargo test -p gpp_cli
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run metrics
+        run: cargo run
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GITHUB_ACTOR: ${{ github.actor }}
