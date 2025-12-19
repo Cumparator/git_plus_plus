@@ -5,7 +5,6 @@ use std::path::Path;
 use tempfile::TempDir;
 use std::process::Command as SysCommand;
 
-/// Обертка над тестовым окружением
 struct TestEnv {
     /// Временная директория, удалится сама при выходе из скоупа
     root: TempDir,
@@ -57,7 +56,6 @@ impl TestEnv {
     }
 }
 
-// --- ТЕСТОВЫЕ СЦЕНАРИИ ---
 
 #[test]
 fn test_init_creates_structure() {
@@ -159,12 +157,10 @@ fn test_chrm_add_and_remove_permissions() {
     let env = TestEnv::new();
     env.gpp().arg("init").assert().success();
 
-    // 1. Создаем ноду (коммит)
     env.write_file("test_file.txt", "content");
     let out = env.gpp().args(&["add", "-m", "init"]).output().unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
 
-    // Вытаскиваем ID созданной ноды из вывода "Node created: <HASH>"
     let node_id = stdout
         .lines()
         .find(|l| l.contains("Node created"))
@@ -175,7 +171,6 @@ fn test_chrm_add_and_remove_permissions() {
 
     assert!(!node_id.is_empty(), "Could not extract node ID");
 
-    // 2. Добавляем remote "github" к этой ноде
     env.gpp()
         .args(&[
             "chrm",
@@ -187,15 +182,12 @@ fn test_chrm_add_and_remove_permissions() {
         .success()
         .stdout(predicate::str::contains("Added permission"));
 
-    // 3. ПРОВЕРКА: Читаем graph.json и ищем там наши данные
-    // Мы делаем это "в лоб", читая файл, чтобы убедиться, что данные реально сохранились на диск
     let json_path = env.path().join(".gitpp/graph.json");
     let json_content = fs::read_to_string(&json_path).expect("Failed to read graph.json");
 
     assert!(json_content.contains("github"), "Graph JSON must contain remote name");
     assert!(json_content.contains("git@github.com:user/repo.git"), "Graph JSON must contain remote URL");
 
-    // 4. Удаляем remote "github" у этой ноды
     env.gpp()
         .args(&[
             "chrm",
@@ -207,39 +199,30 @@ fn test_chrm_add_and_remove_permissions() {
         .success()
         .stdout(predicate::str::contains("Removed permission"));
 
-    // 5. ПРОВЕРКА: Снова читаем файл, remote должен исчезнуть
     let json_content_after = fs::read_to_string(&json_path).expect("Failed to read graph.json");
     assert!(!json_content_after.contains("git@github.com:user/repo.git"), "Remote URL should be removed");
 }
 
 #[test]
 fn test_chrm_fails_without_node_id_argument() {
-    // Тест на то, что если не передать ID ноды (и нет HEAD), команда упадет или попросит ID
     let env = TestEnv::new();
     env.gpp().arg("init").assert().success();
-
-    // HEAD пока нет, поэтому chrm должен ругаться или требовать --node
-    // (В текущей реализации main.rs он пытается взять HEAD, если node не передан)
 
     env.gpp()
         .args(&["chrm", "--remote", "origin", "--url", "http://test"])
         .assert()
-        .failure(); // Ожидаем ошибку, так как HEAD нет, и --node не передан
+        .failure();
 }
 
 #[test]
 fn test_push_to_local_bare_repository() {
     let env = TestEnv::new();
 
-    // 1. Инициализируем GPP (Клиент)
     env.gpp().arg("init").assert().success();
 
-    // 2. Создаем "Фейковый сервер" (Bare Repo)
-    // Это просто соседняя папка, которая будет притворяться Гитхабом
     let remote_dir = tempfile::TempDir::new().unwrap();
     let remote_path = remote_dir.path().to_str().unwrap().to_string();
 
-    // Инициализируем там чистый git (без рабочей копии, только база)
     let setup_status = SysCommand::new("git")
         .args(&["init", "--bare"])
         .current_dir(&remote_dir)
@@ -247,12 +230,10 @@ fn test_push_to_local_bare_repository() {
         .expect("Failed to init bare repo");
     assert!(setup_status.status.success());
 
-    // 3. Создаем работу в Клиенте
     env.write_file("code.rs", "fn main() {}");
     let out = env.gpp().args(&["add", "-m", "feature_x"]).output().unwrap();
     let stdout = String::from_utf8(out.stdout).unwrap();
 
-    // Вытаскиваем ID ноды
     let node_id = stdout
         .lines()
         .find(|l| l.contains("Node created"))
@@ -261,8 +242,6 @@ fn test_push_to_local_bare_repository() {
         .trim()
         .to_string();
 
-    // 4. Разрешаем пуш (chrm)
-    // В качестве URL используем абсолютный путь к папке remote_dir
     env.gpp()
         .args(&[
             "chrm",
@@ -273,20 +252,17 @@ fn test_push_to_local_bare_repository() {
         .assert()
         .success();
 
-    // 5. ТЕСТИРУЕМ ПУШ
     env.gpp()
         .args(&[
             "push",
             "--node", &node_id,
             "--remote", "local_server",
-            "--url", &remote_path  // <--- ДОБАВЬТЕ ЭТУ СТРОКУ!
+            "--url", &remote_path 
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Успешно обновлена ссылка"));
 
-    // 6. ПРОВЕРКА: Смотрим, что долетело на "Сервер"
-    // Используем обычный git, чтобы прочитать лог в папке remote_dir
     let verify_cmd = SysCommand::new("git")
         .arg("--git-dir")
         .arg(remote_dir.path())
@@ -296,6 +272,5 @@ fn test_push_to_local_bare_repository() {
 
     let log_output = String::from_utf8(verify_cmd.stdout).unwrap();
 
-    // Проверяем, что в логе сервера есть наше сообщение коммита
     assert!(log_output.contains("feature_x"), "Remote repo should contain the pushed commit");
 }

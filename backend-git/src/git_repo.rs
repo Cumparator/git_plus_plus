@@ -4,8 +4,6 @@ use std::error::Error;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
-#[cfg(windows)]
-use std::os::windows::fs::symlink_dir as symlink;
 
 use gpp_core::types::{NodeId, RemoteRef, Author};
 use gpp_core::backend::RepoBackend;
@@ -81,7 +79,6 @@ impl GitRepo {
             // Windows: Используем Junction Point через mklink /J.
             // Это обходит требование прав администратора (os error 5).
             // Мы вызываем cmd, так как в std нет нативной поддержки junction без сторонних крейтов.
-            // короче говоря сраная винда как всегда суёт костыли в колёса
             let status = Command::new("cmd")
                 .args(["/C", "mklink", "/J", ".git", &target_dir_name])
                 .current_dir(&self.workdir)
@@ -150,7 +147,6 @@ impl RepoBackend for GitRepo {
         local_tip_id: &NodeId,
         remote_target_ref: &str
     ) -> Result<(), Box<dyn Error>> {
-        //self.switch_context(&remote.name)?;
 
         let refspec = format!("{}:{}", local_tip_id.0, remote_target_ref);
         let args = vec!["push", &remote.url, &refspec];

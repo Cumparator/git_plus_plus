@@ -103,7 +103,6 @@ fn main() -> Result<()> {
         anyhow::bail!("Репозиторий не найден. Запустите gpp init");
     }
 
-    // --- Dependency Injection ---
     let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
     let backend_main = Box::new(GitRepo::new(&current_dir));
     let backend_aux = Box::new(GitRepo::new(&current_dir)); // Для PushManager
@@ -111,7 +110,6 @@ fn main() -> Result<()> {
     let graph = VersionGraph::new(storage, backend_main);
     let mut dispatcher = CommandDispatcher::new(graph, backend_aux);
 
-    // --- CLI -> Command DTO ---
     let get_head = || -> Result<Option<NodeId>> {
         if head_path.exists() {
             let h = fs::read_to_string(&head_path)?;
@@ -175,14 +173,10 @@ fn main() -> Result<()> {
             match result {
                 CmdResult::Success(msg) => {
                     println!("{}", msg);
-                    // Если это был Add, надо обновить HEAD (это логика приложения, а не Core)
-                    // В идеале Dispatcher должен возвращать измененные данные, но для простоты:
                     match &cli.command {
                         Commands::Checkout { node } => {
                             fs::write(&head_path, node.as_bytes())?;
                         },
-                        // Для Add обновление HEAD пока оставим "как есть" (нужно парсить msg или менять return type),
-                        // но для Checkout это критично.
                         _ => {}
                     }
                 },
