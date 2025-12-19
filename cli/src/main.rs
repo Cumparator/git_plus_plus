@@ -61,7 +61,6 @@ enum Commands {
         #[arg(help = "ID ноды")]
         node: String,
     },
-    // --- НОВОЕ: Команда запуска графики ---
     #[command(about = "Запуск графического интерфейса")]
     Gui,
 }
@@ -74,7 +73,6 @@ fn main() -> Result<()> {
     let db_path = gpp_dir.join("graph.json");
     let head_path = gpp_dir.join("HEAD");
 
-    // --- INIT ---
     if let Commands::Init { remotes } = cli.command {
         if gpp_dir.exists() {
             println!("{}", "Репозиторий Git++ уже существует".yellow());
@@ -110,7 +108,6 @@ fn main() -> Result<()> {
             }
         }
 
-        // Обновляем .git/info/exclude
         let exclude_path = current_dir.join(".git").join("info").join("exclude");
         if let Some(parent) = exclude_path.parent() {
             fs::create_dir_all(parent)?;
@@ -123,20 +120,16 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Проверка существования репозитория (для всех команд кроме init)
     if !gpp_dir.exists() {
         anyhow::bail!("{} Запустите gpp init", "Репозиторий не найден.".red().bold());
     }
 
-    // --- НОВОЕ: ОБРАБОТКА GUI ---
-    // Если выбрана команда GUI, запускаем окно и выходим, не создавая диспетчер
     if let Commands::Gui = cli.command {
         println!("Запуск графического интерфейса...");
         gui::run_gui().map_err(|e| anyhow::anyhow!("GUI Error: {}", e))?;
         return Ok(());
     }
 
-    // --- Dependency Injection ---
     let storage = Box::new(JsonStorage::new(&db_path).map_err(|e| anyhow::anyhow!(e))?);
     let backend_main = Box::new(GitRepo::new(&current_dir));
     let backend_aux = Box::new(GitRepo::new(&current_dir));
@@ -154,13 +147,12 @@ fn main() -> Result<()> {
         }
     };
 
-    // --- MAPPING CLI -> COMMAND ---
+    // --- MAPPING CLI -> COMMAND DTO ---
     let cmd_dto = match &cli.command {
         Commands::Init { .. } => unreachable!(),
-        Commands::Gui => unreachable!(), // Мы обработали это выше
+        Commands::Gui => unreachable!(),
 
         Commands::Add { message, parents, remotes } => {
-            // ИНТЕРАКТИВНОСТЬ: Если нет сообщения, спрашиваем
             let msg = match message {
                 Some(m) => m.clone(),
                 None => {
@@ -212,7 +204,6 @@ fn main() -> Result<()> {
         }
     };
 
-    // --- DISPATCH & OUTPUT ---
     match dispatcher.dispatch(cmd_dto) {
         Ok(result) => {
             match result {
