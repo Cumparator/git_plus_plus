@@ -22,7 +22,6 @@ impl GitRepo {
         }
     }
 
-    /// Вспомогательный метод для запуска git команд
     fn run_git_command(&self, args: &[&str]) -> Result<String, Box<dyn Error>> {
         let mut command = Command::new("git");
         command.current_dir(&self.workdir);

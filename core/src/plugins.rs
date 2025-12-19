@@ -33,7 +33,7 @@ impl PluginManager {
         self.plugins.get(name).map(|p| p.create_handler())
     }
 
-    /// Список команд для генерации справки (Day 8 roadmap)
+    /// Список команд для генерации справки
     pub fn list_commands(&self) -> Vec<(String, String)> {
         self.plugins.iter()
             .map(|(k, v)| (k.clone(), v.description().to_string()))
