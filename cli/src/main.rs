@@ -31,7 +31,7 @@ enum Commands {
     Add {
         #[arg(short, long)]
         message: Option<String>,
-        #[arg(short, long)]
+        #[arg(short, long, num_args = 0..)]
         parents: Option<Vec<String>>,
         #[arg(short, long, num_args = 0..)]
         remotes: Option<Vec<String>>,

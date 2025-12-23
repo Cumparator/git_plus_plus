@@ -1,8 +1,6 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2, FontId};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-
-// Импортируем типы из ядра
 use gpp_core::types::{Node, NodeId};
 
 // --- КОНСТАНТЫ ОТРИСОВКИ ---
@@ -27,11 +25,9 @@ pub fn run_gui() -> Result<(), eframe::Error> {
     )
 }
 
-/// Структура для отрисовки ноды.
-/// Содержит уже вычисленные координаты и цвет.
 struct VisualNode {
     id: NodeId,
-    display_message: String, // Обрезанное сообщение для вывода на граф
+    display_message: String,
     author: String,
     row: usize,       // Y - поколение
     x: f32,           // X - точная позиция
@@ -40,7 +36,7 @@ struct VisualNode {
 
 // --- ПАЛИТРА И СМЕШИВАНИЕ (CMY) ---
 struct Palette {
-    /// Карта: Имя ремоута -> Базовый цвет
+    /// Имя ремоута -> Базовый цвет
     remote_colors: HashMap<String, Color32>,
     /// Пул цветов (CMY приоритет для субтрактивного смешивания)
     pool: Vec<[u8; 3]>, 
@@ -63,7 +59,6 @@ impl Palette {
         }
     }
 
-    /// Назначает цвета всем встреченным ремоутам
     fn assign_colors(&mut self, nodes: &HashMap<NodeId, Node>) {
         let mut all_remotes: HashSet<String> = HashSet::new();
         for node in nodes.values() {
@@ -72,7 +67,6 @@ impl Palette {
             }
         }
 
-        // Сортируем для детерминизма
         let mut sorted_remotes: Vec<String> = all_remotes.into_iter().collect();
         sorted_remotes.sort();
 
@@ -89,7 +83,6 @@ impl Palette {
         }
     }
 
-    /// Магическая формула смешивания (Multiply / Умножение)
     fn get_mixed_color(&self, node_remotes: &HashSet<gpp_core::types::RemoteRef>) -> Color32 {
         if node_remotes.is_empty() {
             return Color32::from_gray(80); // Серый для локальных нод
@@ -102,7 +95,7 @@ impl Palette {
 
         for remote in node_remotes {
             if let Some(color) = self.remote_colors.get(&remote.name) {
-                // Formula: (Base * Layer) / 255
+                // (Base * Layer) / 255
                 r_acc = (r_acc * color.r() as u16) / 255;
                 g_acc = (g_acc * color.g() as u16) / 255;
                 b_acc = (b_acc * color.b() as u16) / 255;
@@ -156,8 +149,7 @@ impl GppApp {
 
         let content = fs::read_to_string(db_path)?;
         self.raw_nodes = serde_json::from_str(&content)?;
-        
-        // 1. Раздаем цвета ремоутам
+
         self.palette.assign_colors(&self.raw_nodes);
         
         Ok(())
@@ -169,7 +161,6 @@ impl GppApp {
 
         if self.raw_nodes.is_empty() { return; }
 
-        // Находим корни
         let mut roots: Vec<NodeId> = self.raw_nodes.values()
             .filter(|n| n.parents.is_empty())
             .map(|n| n.id.clone())
@@ -183,9 +174,9 @@ impl GppApp {
         for root in roots {
             let tree_width_used = self.layout_tree(
                 &root, 
-                0,                  // row
-                current_global_x,   // base_x
-                0,                  // depth
+                0,           // row
+                current_global_x, // base_x
+                0,          // depth
                 &mut visited
             );
 
@@ -228,10 +219,7 @@ impl GppApp {
             full_msg
         };
 
-        // Считаем ширину обрезанного текста
         let text_width = estimate_text_width(&display_msg);
-        
-        // Общая ширина ноды (для сдвига следующего дерева)
         let node_width_usage = node_x_offset + (NODE_RADIUS * 2.0) + 10.0 + text_width;
 
         let v_node = VisualNode {
@@ -275,7 +263,6 @@ impl GppApp {
     }
 }
 
-// Оценка ширины текста в пикселях
 fn estimate_text_width(msg: &str) -> f32 {
     let chars = msg.chars().count() + 8; // + место под хеш
     chars as f32 * (FONT_SIZE * 0.6) 
@@ -362,7 +349,7 @@ impl eframe::App for GppApp {
                     )
                 };
 
-                // 1. ЛИНИИ
+                // ЛИНИИ
                 for (start_id, end_id) in &self.connections {
                     if let (Some(start), Some(end)) = (self.visual_nodes.get(start_id), self.visual_nodes.get(end_id)) {
                         let p1 = to_screen(start.row, start.x);
@@ -384,7 +371,7 @@ impl eframe::App for GppApp {
                     }
                 }
 
-                // 2. НОДЫ
+                // НОДЫ
                 for node in self.visual_nodes.values() {
                     let center = to_screen(node.row, node.x);
                     
@@ -395,13 +382,12 @@ impl eframe::App for GppApp {
                     painter.text(
                         text_pos,
                         egui::Align2::LEFT_CENTER,
-                        // Используем обрезанное сообщение
                         format!("{} ({})", node.display_message, &node.id.0[..6]),
                         FontId::proportional(FONT_SIZE),
                         Color32::LIGHT_GRAY,
                     );
 
-                    // TOOLTIP (ПОЛНАЯ ИНФОРМАЦИЯ)
+                    // TOOLTIP
                     let node_rect = Rect::from_center_size(center, Vec2::splat(NODE_RADIUS * 2.0));
                     if let Some(pointer_pos) = response.hover_pos() {
                         if node_rect.contains(pointer_pos) {
@@ -414,7 +400,6 @@ impl eframe::App for GppApp {
                                     let remotes: Vec<_> = raw.remotes.iter().map(|r| r.name.as_str()).collect();
                                     ui.colored_label(Color32::LIGHT_BLUE, format!("Remotes: {:?}", remotes));
                                     ui.separator();
-                                    // Показываем полное сообщение здесь
                                     ui.label(format!("Message:\n{}", raw.message));
                                 }
                             });

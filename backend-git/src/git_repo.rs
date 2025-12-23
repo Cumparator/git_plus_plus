@@ -67,8 +67,7 @@ impl GitRepo {
 
         #[cfg(windows)]
         {
-            // Windows: Используем Junction Point через mklink /J.
-            // Это обходит требование прав администратора (os error 5).
+            // для windows используем Junction Point через mklink /J.
             // Мы вызываем cmd, так как в std нет нативной поддержки junction без сторонних крейтов.
             // короче говоря сраная винда как всегда суёт костыли в колёса
             let status = Command::new("cmd")
@@ -186,7 +185,6 @@ impl RepoBackend for GitRepo {
     }
 
     fn is_repo_empty(&self) -> Result<bool, Box<dyn Error>> {
-        // Проверяем, есть ли HEAD. Если нет, репозиторий пуст.
         let args = vec!["rev-parse", "--verify", "HEAD"];
         match self.run_git_command(&args) {
             Ok(_) => Ok(false),

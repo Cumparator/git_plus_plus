@@ -2,6 +2,8 @@ use google_sheets4::{api::ValueRange, Sheets};
 use yup_oauth2::{ServiceAccountAuthenticator, parse_service_account_key};
 use std::env;
 
+// Всё что здесь есть это страшный костыль для сбора метрик, не кидайтесь ссаными тряпками, мы это потом выпилим нафиг.
+
 const DEFAULT_USER: &str = "CI_CD_BOT";
 
 pub struct MetricsClient {
@@ -10,7 +12,6 @@ pub struct MetricsClient {
 }
 
 impl MetricsClient {
-    /// Создает новый клиент. Требует переменную окружения GOOGLE_CREDENTIALS с JSON-ключом.
     pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let spreadsheet_id = "1Wk85U6XPxNsYD0dh1xscW2FjmA1gRoXIzpDlZ6qKrS4";
 
@@ -37,17 +38,14 @@ impl MetricsClient {
         })
     }
 
-    /// Добавляет +1 к счетчику конкретного пользователя
     pub async fn add_metric(&self, username: &str) -> Result<(), Box<dyn std::error::Error>> {
         self.internal_increment(username).await
     }
 
-    /// Добавляет +1 к счетчику стандартного пользователя (CI_CD_BOT)
     pub async fn add_default_metric(&self) -> Result<(), Box<dyn std::error::Error>> {
         self.internal_increment(DEFAULT_USER).await
     }
 
-    /// Внутренняя логика поиска пользователя и инкремента значения
     async fn internal_increment(&self, username: &str) -> Result<(), Box<dyn std::error::Error>> {
         let range = "Лист1!A:B"; 
 

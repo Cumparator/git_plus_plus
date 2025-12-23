@@ -85,7 +85,6 @@ impl VersionGraph {
             }
         };
 
-        // TODO: Здесь есть проблема. create_commit пишет в ТЕКУЩИЙ активный контекст.
         let tree_id = self.backend.create_tree()?;
         let commit_id = self.backend.create_commit(&tree_id, &parents, &message, &author)?;
 

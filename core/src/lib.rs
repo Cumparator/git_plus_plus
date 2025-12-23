@@ -10,5 +10,4 @@ pub mod plugins;
 pub use types::*;
 pub use backend::*;
 pub use version_graph::*;
-// Убрали CommandSpec из списка ниже:
 pub use dispatcher::{CommandDispatcher, Command, CmdResult, CommandHandler};

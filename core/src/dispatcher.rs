@@ -1,16 +1,10 @@
 use std::error::Error;
-// use std::collections::HashMap; // <--- Эту строку удали или закомментируй (предупреждение)
-
 use crate::version_graph::VersionGraph;
-// ДОБАВИЛИ GraphOps в строку ниже:
 use crate::backend::{RepoBackend, GraphOps}; 
 use crate::push_manager::PushManager;
 use crate::types::{NodeId, Author, RemoteRef};
-use crate::plugins::{PluginManager}; 
+use crate::plugins::{PluginManager};
 
-// Дальше код без изменений...
-
-/// Результат выполнения команды
 #[derive(Debug)]
 pub enum CmdResult {
     Success(String),
@@ -43,7 +37,6 @@ pub enum Command {
         node: Option<NodeId>,
         dry_run: bool,
     },
-    // <--- Добавили поддержку кастомных команд от плагинов
     Custom {
         name: String,
         args: Vec<String>,
@@ -57,9 +50,8 @@ pub trait CommandHandler: Send + Sync {
 pub struct CommandDispatcher {
     graph: VersionGraph,
     aux_backend: Box<dyn RepoBackend>,
-    plugin_mgr: PluginManager, // <--- Поле менеджера
-    
-    // registry: HashMap<String, Box<dyn CommandHandler>>, // Старое поле удалили, теперь всё через plugin_mgr
+    plugin_mgr: PluginManager,
+    // registry: HashMap<String, Box<dyn CommandHandler>>,
 }
 
 impl CommandDispatcher {
@@ -73,8 +65,7 @@ impl CommandDispatcher {
             plugin_mgr: PluginManager::new(),
         }
     }
-    
-    // Метод, чтобы main.rs мог регистрировать плагины (если понадобится)
+
     pub fn plugins(&mut self) -> &mut PluginManager {
         &mut self.plugin_mgr
     }
@@ -86,35 +77,49 @@ impl CommandDispatcher {
                 Ok(CmdResult::Success(format!("Node created: {}", node_id.0)))
             }
 
-            Command::Log {} => {
+            Command::Log => {
                 let mut output = String::new();
+
                 let mut queue = std::collections::VecDeque::new();
                 let mut visited = std::collections::HashSet::new();
 
                 let roots = self.graph.list_roots()?;
+                if roots.is_empty() {
+                    return Ok(CmdResult::Output("History is empty.".to_string()));
+                }
+
                 for r in roots {
                     queue.push_back(r);
                 }
 
                 while let Some(current_id) = queue.pop_front() {
-                    if !visited.insert(current_id.clone()) { continue; }
+                    if !visited.insert(current_id.clone()) {
+                        continue;
+                    }
+
                     let node = self.graph.get_node(&current_id)?;
-                    
-                    output.push_str(&format!("Commit: {}\n", current_id.0));
-                    output.push_str(&format!("Author: {} <{}>\n", node.author.name, node.author.email));
+
+                    output.push_str(&format!("Commit:  {}\n", current_id.0));
                     output.push_str(&format!("Message: {}\n", node.message));
+                    output.push_str(&format!("Remotes: {:?}\n", node.remotes));
+
+                    if !node.parents.is_empty() {
+                        let parents_str: Vec<String> = node.parents.iter().map(|p| p.0.clone()).collect();
+                        output.push_str(&format!("Parents: {:?}\n", parents_str));
+                    }
+                    if !node.children.is_empty() {
+                        let children_str: Vec<String> = node.children.iter().map(|c| c.0.clone()).collect();
+                        output.push_str(&format!("Children: {:?}\n", children_str));
+                    }
+
                     output.push_str("------------------------------\n");
 
-                    for parent_id in node.parents {
-                        queue.push_back(parent_id);
+                    for child_id in node.children {
+                        queue.push_back(child_id);
                     }
                 }
-                
-                if output.is_empty() {
-                    Ok(CmdResult::Output("History is empty.".to_string()))
-                } else {
-                    Ok(CmdResult::Output(output))
-                }
+
+                Ok(CmdResult::Output(output))
             }
 
             Command::Checkout { node } => {
@@ -151,7 +156,6 @@ impl CommandDispatcher {
                 }
             }
 
-            // <--- Логика вызова плагинов
             Command::Custom { name, args } => {
                 if let Some(handler) = self.plugin_mgr.get_handler(&name) {
                     handler.execute(&args, &mut self.graph)

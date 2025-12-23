@@ -33,7 +33,6 @@ pub trait RepoBackend {
     fn checkout_node(&self, node: &Node) -> Result<(), Box<dyn Error>>;
 }
 
-/// Трейт для получения данных ноды из графа.
 pub trait GraphOps {
     fn get_node(&self, id: &NodeId) -> Result<Node, Box<dyn Error>>;
 }
