@@ -1,21 +1,72 @@
-name: min release
+name: Release
 
 on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build-release:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: gpp_cli
+            asset_name: gpp-linux-x86_64
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: gpp_cli.exe
+            asset_name: gpp-windows-x86_64
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: gpp_cli
+            asset_name: gpp-macos-x86_64
+
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
 
-      - run: cargo build --release --target x86_64-unknown-linux-gnu -p gpp_cli
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }} -p gpp_cli
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          GITHUB_ACTOR: ${{ github.actor }}
 
-      - uses: softprops/action-gh-release@v1
+      - name: Package Unix
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+          cd -
+
+      - name: Package Windows
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $source = "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}"
+          $destination = "${{ matrix.asset_name }}.zip"
+          Compress-Archive -Path $source -DestinationPath $destination
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
         with:
-          files: target/x86_64-unknown-linux-gnu/release/gpp_cli
+          files: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.zip
