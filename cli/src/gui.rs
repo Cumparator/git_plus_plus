@@ -6,12 +6,13 @@ use std::fs;
 use gpp_core::types::{Node, NodeId};
 
 // --- КОНСТАНТЫ ОТРИСОВКИ ---
-const NODE_RADIUS: f32 = 9.0;
-const Y_SPACING: f32 = 60.0;     // Шаг по вертикали (между родителями и детьми)
-const BRANCH_STEP: f32 = 30.0;   // Шаг отступа при ветвлении внутри одного дерева
-const TREE_GAP: f32 = 80.0;      // Минимальное расстояние между независимыми деревьями
-const PADDING: f32 = 40.0;       // Отступ от краев окна
+const NODE_RADIUS: f32 = 10.0;   // Радиус узла
+const Y_SPACING: f32 = 80.0;     // Вертикальный отступ между поколениями
+const BRANCH_STEP: f32 = 180.0;  // Горизонтальный отступ ветки (достаточно широкий для текста)
+const TREE_GAP: f32 = 150.0;     // Отступ между независимыми деревьями
+const PADDING: f32 = 60.0;       // Отступ от краев окна
 const FONT_SIZE: f32 = 14.0;     // Размер шрифта
+const MAX_MSG_LEN: usize = 10;   // Максимальная длина сообщения перед обрезкой
 
 pub fn run_gui() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
@@ -26,13 +27,90 @@ pub fn run_gui() -> Result<(), eframe::Error> {
     )
 }
 
+/// Структура для отрисовки ноды.
+/// Содержит уже вычисленные координаты и цвет.
 struct VisualNode {
     id: NodeId,
-    message: String,
+    display_message: String, // Обрезанное сообщение для вывода на граф
     author: String,
-    row: usize,       // Y - остается дискретным (поколения)
-    x: f32,           // X - теперь float (точная позиция в пикселях)
+    row: usize,       // Y - поколение
+    x: f32,           // X - точная позиция
     color: Color32,
+}
+
+// --- ПАЛИТРА И СМЕШИВАНИЕ (CMY) ---
+struct Palette {
+    /// Карта: Имя ремоута -> Базовый цвет
+    remote_colors: HashMap<String, Color32>,
+    /// Пул цветов (CMY приоритет для субтрактивного смешивания)
+    pool: Vec<[u8; 3]>, 
+}
+
+impl Palette {
+    fn new() -> Self {
+        Self {
+            remote_colors: HashMap::new(),
+            // Порядок выдачи цветов: Cyan, Magenta, Yellow. 
+            // Cyan=[0,255,255], Magenta=[255,0,255], Yellow=[255,255,0]
+            pool: vec![
+                [0, 255, 255],   // 1. Cyan (Голубой) -> Origin
+                [255, 0, 255],   // 2. Magenta (Малиновый)
+                [255, 255, 0],   // 3. Yellow (Желтый)
+                [255, 128, 0],   // 4. Orange
+                [0, 255, 128],   // 5. Spring Green
+                [128, 0, 255],   // 6. Purple
+            ],
+        }
+    }
+
+    /// Назначает цвета всем встреченным ремоутам
+    fn assign_colors(&mut self, nodes: &HashMap<NodeId, Node>) {
+        let mut all_remotes: HashSet<String> = HashSet::new();
+        for node in nodes.values() {
+            for remote in &node.remotes {
+                all_remotes.insert(remote.name.clone());
+            }
+        }
+
+        // Сортируем для детерминизма
+        let mut sorted_remotes: Vec<String> = all_remotes.into_iter().collect();
+        sorted_remotes.sort();
+
+        // Приоритет: origin всегда должен быть первым (Cyan)
+        if let Some(pos) = sorted_remotes.iter().position(|r| r == "origin") {
+            let val = sorted_remotes.remove(pos);
+            sorted_remotes.insert(0, val);
+        }
+
+        self.remote_colors.clear();
+        for (i, name) in sorted_remotes.iter().enumerate() {
+            let raw_color = self.pool[i % self.pool.len()];
+            self.remote_colors.insert(name.clone(), Color32::from_rgb(raw_color[0], raw_color[1], raw_color[2]));
+        }
+    }
+
+    /// Магическая формула смешивания (Multiply / Умножение)
+    fn get_mixed_color(&self, node_remotes: &HashSet<gpp_core::types::RemoteRef>) -> Color32 {
+        if node_remotes.is_empty() {
+            return Color32::from_gray(80); // Серый для локальных нод
+        }
+
+        // Начинаем с белого (255, 255, 255)
+        let mut r_acc: u16 = 255;
+        let mut g_acc: u16 = 255;
+        let mut b_acc: u16 = 255;
+
+        for remote in node_remotes {
+            if let Some(color) = self.remote_colors.get(&remote.name) {
+                // Formula: (Base * Layer) / 255
+                r_acc = (r_acc * color.r() as u16) / 255;
+                g_acc = (g_acc * color.g() as u16) / 255;
+                b_acc = (b_acc * color.b() as u16) / 255;
+            }
+        }
+
+        Color32::from_rgb(r_acc as u8, g_acc as u8, b_acc as u8)
+    }
 }
 
 struct GppApp {
@@ -40,8 +118,9 @@ struct GppApp {
     visual_nodes: HashMap<NodeId, VisualNode>,
     connections: Vec<(NodeId, NodeId)>,
     error_msg: Option<String>,
+    palette: Palette, 
     
-    // Размеры холста для скролла
+    // Размеры холста
     max_row: usize,
     total_width: f32,
 }
@@ -53,6 +132,7 @@ impl GppApp {
             visual_nodes: HashMap::new(),
             connections: Vec::new(),
             error_msg: None,
+            palette: Palette::new(),
             max_row: 0,
             total_width: 0.0,
         };
@@ -76,6 +156,10 @@ impl GppApp {
 
         let content = fs::read_to_string(db_path)?;
         self.raw_nodes = serde_json::from_str(&content)?;
+        
+        // 1. Раздаем цвета ремоутам
+        self.palette.assign_colors(&self.raw_nodes);
+        
         Ok(())
     }
 
@@ -85,36 +169,26 @@ impl GppApp {
 
         if self.raw_nodes.is_empty() { return; }
 
-        // 1. Находим корни
+        // Находим корни
         let mut roots: Vec<NodeId> = self.raw_nodes.values()
             .filter(|n| n.parents.is_empty())
             .map(|n| n.id.clone())
             .collect();
         
-        // Сортируем для стабильности (чтобы деревья не скакали при обновлении)
         roots.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut visited = HashSet::new();
-        
-        // Курсор глобальной позиции X. Каждое следующее дерево начнется отсюда.
         let mut current_global_x = 0.0;
 
         for root in roots {
-            let tree_color = generate_vibrant_color(&root.0);
-            
-            // Запускаем рекурсивный лайаут для ОДНОГО дерева.
-            // Он вернет ширину (в пикселях), которую заняло это дерево (включая текст).
             let tree_width_used = self.layout_tree(
                 &root, 
                 0,                  // row
-                current_global_x,   // base_x (где начинается ствол дерева)
-                0,                  // depth (отступ ветвления)
-                &mut visited, 
-                tree_color
+                current_global_x,   // base_x
+                0,                  // depth
+                &mut visited
             );
 
-            // Сдвигаем курсор для следующего дерева: 
-            // Ширина текущего дерева + безопасный зазор
             current_global_x += tree_width_used + TREE_GAP;
         }
         
@@ -122,16 +196,13 @@ impl GppApp {
         self.total_width = current_global_x;
     }
 
-    /// Рекурсивная функция. Возвращает МАКСИМАЛЬНУЮ ширину (от base_x),
-    /// до которой дотянулось это поддерево (учитывая длину текста).
     fn layout_tree(
         &mut self, 
         node_id: &NodeId, 
         row: usize, 
-        base_x: f32,      // Глобальное начало этого дерева
-        depth: usize,     // Глубина ветвления (0, 1, 2...) внутри дерева
+        base_x: f32,      
+        depth: usize,     
         visited: &mut HashSet<NodeId>,
-        color: Color32,
     ) -> f32 {
         if visited.contains(node_id) { return 0.0; }
         visited.insert(node_id.clone());
@@ -141,50 +212,58 @@ impl GppApp {
             None => return 0.0,
         };
 
-        // 1. Вычисляем позицию X для этой конкретной ноды
+        // --- ЦВЕТ ---
+        let node_color = self.palette.get_mixed_color(&node.remotes);
+
+        // --- ПОЗИЦИЯ ---
         let node_x_offset = depth as f32 * BRANCH_STEP;
         let absolute_x = base_x + node_x_offset;
 
-        // 2. Оцениваем длину текста, чтобы знать, сколько места нода занимает справа
-        let display_msg = node.message.lines().next().unwrap_or("").to_string();
-        let text_width = estimate_text_width(&display_msg, &node.id.0);
+        // --- ТЕКСТ (ОБРЕЗКА) ---
+        let full_msg = node.message.lines().next().unwrap_or("").to_string();
+        let display_msg = if full_msg.chars().count() > MAX_MSG_LEN {
+            let truncated: String = full_msg.chars().take(MAX_MSG_LEN).collect();
+            format!("{}...", truncated)
+        } else {
+            full_msg
+        };
+
+        // Считаем ширину обрезанного текста
+        let text_width = estimate_text_width(&display_msg);
         
-        // Ширина, занятая этой конкретной нодой (относительно base_x)
-        // offset + радиус + отступ текста + ширина текста
+        // Общая ширина ноды (для сдвига следующего дерева)
         let node_width_usage = node_x_offset + (NODE_RADIUS * 2.0) + 10.0 + text_width;
 
-        // Сохраняем ноду
         let v_node = VisualNode {
             id: node_id.clone(),
-            message: display_msg,
+            display_message: display_msg,
             author: node.author.name.clone(),
             row,
             x: absolute_x,
-            color,
+            color: node_color,
         };
         self.visual_nodes.insert(node_id.clone(), v_node);
 
-        // 3. Обрабатываем детей
+        // --- ДЕТИ ---
         let mut children_vec: Vec<NodeId> = node.children.iter().cloned().collect();
         children_vec.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // Нам нужно найти максимальную ширину среди всех детей и самой ноды
         let mut max_width_in_subtree = node_width_usage;
 
         for (i, child_id) in children_vec.iter().enumerate() {
             self.connections.push((node_id.clone(), child_id.clone()));
 
-            // Если ребенок первый - он продолжает ствол (depth),
-            // Если второй и далее - это ветвление (depth + 1)
-            let next_depth = if i == 0 { depth } else { depth + 1 };
+            // ВЕЕРНОЕ РАСПОЛОЖЕНИЕ:
+            // Каждый следующий ребенок уходит глубже вправо (depth + i), 
+            // чтобы не накладываться на предыдущего.
+            let next_depth = depth + i;
             
             let child_width = self.layout_tree(
                 child_id, 
                 row + 1, 
                 base_x, 
                 next_depth, 
-                visited, 
-                color
+                visited
             );
             
             if child_width > max_width_in_subtree {
@@ -196,49 +275,64 @@ impl GppApp {
     }
 }
 
-// Оценка ширины текста в пикселях (эвристика)
-fn estimate_text_width(msg: &str, hash: &str) -> f32 {
-    // Примерно 8 пикселей на символ для шрифта 14.0 + длина хеша
-    let chars = msg.chars().count() + 8; // +8 символов на хеш (a1b2...) и скобки
+// Оценка ширины текста в пикселях
+fn estimate_text_width(msg: &str) -> f32 {
+    let chars = msg.chars().count() + 8; // + место под хеш
     chars as f32 * (FONT_SIZE * 0.6) 
-}
-
-fn generate_vibrant_color(hash_seed: &str) -> Color32 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    hash_seed.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let hue = (hash % 360) as f32;
-    let saturation = 0.8; 
-    let value = 0.9;      
-
-    let c = value * saturation;
-    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
-    let m = value - c;
-
-    let (r, g, b) = if hue < 60.0 { (c, x, 0.0) }
-    else if hue < 120.0 { (x, c, 0.0) }
-    else if hue < 180.0 { (0.0, c, x) }
-    else if hue < 240.0 { (0.0, x, c) }
-    else if hue < 300.0 { (x, 0.0, c) }
-    else { (c, 0.0, x) };
-
-    Color32::from_rgb(
-        ((r + m) * 255.0) as u8,
-        ((g + m) * 255.0) as u8,
-        ((b + m) * 255.0) as u8,
-    )
 }
 
 impl eframe::App for GppApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.set_visuals(egui::Visuals::dark());
 
+        // --- ПАНЕЛЬ ЛЕГЕНДЫ ---
+        egui::SidePanel::left("legend_panel")
+            .resizable(false)
+            .min_width(160.0)
+            .show(ctx, |ui| {
+                ui.add_space(10.0);
+                ui.heading("Remotes");
+                ui.separator();
+
+                let mut sorted_legend: Vec<_> = self.palette.remote_colors.iter().collect();
+                sorted_legend.sort_by_key(|(k, _)| *k);
+
+                if sorted_legend.is_empty() {
+                     ui.label(egui::RichText::new("Local only").italics());
+                } else {
+                    for (name, color) in sorted_legend {
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui.allocate_exact_size(Vec2::splat(16.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(), 6.0, *color);
+                            ui.label(name);
+                        });
+                    }
+                }
+
+                ui.add_space(20.0);
+                ui.heading("Mixing Logic");
+                ui.separator();
+                ui.label("Multiply Blending:");
+                
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Cyan").color(Color32::from_rgb(0, 255, 255)));
+                    ui.label("+");
+                    ui.label(egui::RichText::new("Yellow").color(Color32::YELLOW));
+                    ui.label("=");
+                    ui.label(egui::RichText::new("Green").color(Color32::GREEN));
+                });
+                 ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Cyan").color(Color32::from_rgb(0, 255, 255)));
+                    ui.label("+");
+                    ui.label(egui::RichText::new("Magenta").color(Color32::from_rgb(255, 0, 255)));
+                    ui.label("=");
+                    ui.label(egui::RichText::new("Blue").color(Color32::from_rgb(50, 50, 255)));
+                });
+            });
+
+        // --- ГРАФ ---
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Git++ Forest Graph");
+            ui.heading("Git++ Forest");
             
             if let Some(err) = &self.error_msg {
                 ui.colored_label(Color32::RED, err);
@@ -252,7 +346,6 @@ impl eframe::App for GppApp {
             }
 
             egui::ScrollArea::both().show(ui, |ui| {
-                // Вычисляем размер холста на основе реальных данных
                 let width = self.total_width + PADDING * 2.0;
                 let height = (self.max_row + 2) as f32 * Y_SPACING + PADDING * 2.0;
                 
@@ -261,7 +354,6 @@ impl eframe::App for GppApp {
                     egui::Sense::hover()
                 );
                 
-                // Функция трансформации: Row -> Y, X -> X
                 let to_screen = |row: usize, x: f32| -> Pos2 {
                     let start = response.rect.min;
                     Pos2::new(
@@ -296,33 +388,35 @@ impl eframe::App for GppApp {
                 for node in self.visual_nodes.values() {
                     let center = to_screen(node.row, node.x);
                     
-                    // Рисуем точку
                     painter.circle_filled(center, NODE_RADIUS, node.color);
                     painter.circle_stroke(center, NODE_RADIUS, Stroke::new(1.5, Color32::WHITE));
 
-                    // Текст
                     let text_pos = center + Vec2::new(NODE_RADIUS + 8.0, 0.0);
                     painter.text(
                         text_pos,
                         egui::Align2::LEFT_CENTER,
-                        format!("{} ({})", node.message, &node.id.0[..6]),
+                        // Используем обрезанное сообщение
+                        format!("{} ({})", node.display_message, &node.id.0[..6]),
                         FontId::proportional(FONT_SIZE),
                         Color32::LIGHT_GRAY,
                     );
 
-                    // Tooltip (при наведении)
+                    // TOOLTIP (ПОЛНАЯ ИНФОРМАЦИЯ)
                     let node_rect = Rect::from_center_size(center, Vec2::splat(NODE_RADIUS * 2.0));
-                    // Также добавляем rect текста, чтобы тултип работал и на тексте
-                    // (для простоты тут только на кружочке)
-                    
                     if let Some(pointer_pos) = response.hover_pos() {
                         if node_rect.contains(pointer_pos) {
                             egui::show_tooltip(ctx, response.id, |ui| {
-                                ui.strong("Commit Details");
+                                ui.strong("Node Details");
                                 ui.label(format!("ID: {}", node.id.0));
                                 ui.label(format!("Author: {}", node.author));
-                                let full_msg = self.raw_nodes.get(&node.id).map(|n| n.message.as_str()).unwrap_or("?");
-                                ui.label(format!("Message: \n{}", full_msg));
+                                
+                                if let Some(raw) = self.raw_nodes.get(&node.id) {
+                                    let remotes: Vec<_> = raw.remotes.iter().map(|r| r.name.as_str()).collect();
+                                    ui.colored_label(Color32::LIGHT_BLUE, format!("Remotes: {:?}", remotes));
+                                    ui.separator();
+                                    // Показываем полное сообщение здесь
+                                    ui.label(format!("Message:\n{}", raw.message));
+                                }
                             });
                         }
                     }
